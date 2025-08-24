@@ -1,6 +1,4 @@
-﻿
-#region Using declarations
-using System;
+﻿using System;
 using System.Windows.Media;
 using NinjaTrader.Cbi;
 using NinjaTrader.Data;
@@ -12,7 +10,6 @@ using NinjaTrader.NinjaScript.DrawingTools;
 using NinjaTrader.NinjaScript.Strategies;
 using System.ComponentModel.DataAnnotations;
 using System.Collections.Generic;
-#endregion
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
@@ -90,6 +87,10 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int consecutiveLosses = 0;
         private int lastTradeCount = 0;
         private List<string> openEntries = new List<string>();
+        private double sharedLongStopLoss = 0;
+        private double sharedLongTakeProfit = 0;
+        private double sharedShortStopLoss = 0;
+        private double sharedShortTakeProfit = 0;
 
         // User input properties
         [NinjaScriptProperty]
@@ -244,6 +245,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 afternoonSessionLosses = 0;
                 tradeCountToday = 0;
                 consecutiveLosses = 0;
+                sharedLongStopLoss = 0;
+                sharedLongTakeProfit = 0;
+                sharedShortStopLoss = 0;
+                sharedShortTakeProfit = 0;
                 Print($"New trading day reset at {Time[0]}: lastDay={lastDay}, tradeCountToday={tradeCountToday}, all session stats cleared");
             }
 
@@ -278,8 +283,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                 BearishFVG1Min();
                 DrawLevels5M();
                 DrawFVG5M();
-                //DrawLevels1H();
-                //DrawFVG1H();
                 DrawTradeSetupLabel();
                 DrawTradingStatus();
             }
@@ -322,7 +325,13 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
 
             if (Position.MarketPosition == MarketPosition.Flat)
+            {
                 currentTradeSetup = "";
+                sharedLongStopLoss = 0;
+                sharedLongTakeProfit = 0;
+                sharedShortStopLoss = 0;
+                sharedShortTakeProfit = 0;
+            }
         }
 
         private bool TradingIsAllowed(out string reason)
@@ -891,10 +900,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             double entryApprox = Close[0];
             double riskPoints;
-            if (FixedStopLossTicks > 0)
+            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
+            {
+                riskPoints = entryApprox - sharedLongStopLoss;
+            }
+            else if (FixedStopLossTicks > 0)
             {
                 riskPoints = FixedStopLossTicks * TickSize;
-                intendedLongStop = entryApprox - riskPoints; // Approximate for sizing
+                intendedLongStop = entryApprox - riskPoints;
             }
             else
             {
@@ -938,10 +951,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             double entryApprox = Close[0];
             double riskPoints;
-            if (FixedStopLossTicks > 0)
+            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
+            {
+                riskPoints = sharedShortStopLoss - entryApprox;
+            }
+            else if (FixedStopLossTicks > 0)
             {
                 riskPoints = FixedStopLossTicks * TickSize;
-                intendedShortStop = entryApprox + riskPoints; // Approximate for sizing
+                intendedShortStop = entryApprox + riskPoints;
             }
             else
             {
@@ -993,7 +1010,11 @@ namespace NinjaTrader.NinjaScript.Strategies
                         }
                         double entryApprox = Close[0];
                         double riskPoints;
-                        if (FixedStopLossTicks > 0)
+                        if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
+                        {
+                            riskPoints = entryApprox - sharedLongStopLoss;
+                        }
+                        else if (FixedStopLossTicks > 0)
                         {
                             riskPoints = FixedStopLossTicks * TickSize;
                         }
@@ -1049,7 +1070,11 @@ namespace NinjaTrader.NinjaScript.Strategies
                         }
                         double entryApprox = Close[0];
                         double riskPoints;
-                        if (FixedStopLossTicks > 0)
+                        if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
+                        {
+                            riskPoints = sharedShortStopLoss - entryApprox;
+                        }
+                        else if (FixedStopLossTicks > 0)
                         {
                             riskPoints = FixedStopLossTicks * TickSize;
                         }
@@ -1114,113 +1139,155 @@ namespace NinjaTrader.NinjaScript.Strategies
         private void ProcessLongExecution(Execution execution)
         {
             double stopPrice;
-            if (FixedStopLossTicks > 0)
-            {
-                stopPrice = execution.Price - FixedStopLossTicks * TickSize;
-            }
-            else
-            {
-                stopPrice = intendedLongStop;
-                if (execution.Price <= stopPrice)
-                {
-                    ExitLong(1, "", execution.Order.Name);
-                    return;
-                }
-            }
-            double risk = execution.Price - stopPrice;
             double target;
-            if (FixedTakeProfitTicks > 0)
+            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0 && sharedLongTakeProfit > 0)
             {
-                target = execution.Price + FixedTakeProfitTicks * TickSize;
+                stopPrice = sharedLongStopLoss;
+                target = sharedLongTakeProfit;
             }
             else
             {
-                target = execution.Price + risk;
+                if (FixedStopLossTicks > 0)
+                {
+                    stopPrice = execution.Price - FixedStopLossTicks * TickSize;
+                }
+                else
+                {
+                    stopPrice = intendedLongStop;
+                    if (execution.Price <= stopPrice)
+                    {
+                        ExitLong(1, "", execution.Order.Name);
+                        return;
+                    }
+                }
+                double risk = execution.Price - stopPrice;
+                if (FixedTakeProfitTicks > 0)
+                {
+                    target = execution.Price + FixedTakeProfitTicks * TickSize;
+                }
+                else
+                {
+                    target = execution.Price + risk;
+                }
+                sharedLongStopLoss = stopPrice;
+                sharedLongTakeProfit = target;
             }
             SetStopLoss(execution.Order.Name, CalculationMode.Price, stopPrice, false);
             SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
+            Print($"Long execution at {execution.Price}, Stop: {stopPrice}, Target: {target}");
         }
 
         private void ProcessShortExecution(Execution execution)
         {
             double stopPrice;
-            if (FixedStopLossTicks > 0)
-            {
-                stopPrice = execution.Price + FixedStopLossTicks * TickSize;
-            }
-            else
-            {
-                stopPrice = intendedShortStop;
-                if (execution.Price >= stopPrice)
-                {
-                    ExitShort(1, "", execution.Order.Name);
-                    return;
-                }
-            }
-            double risk = stopPrice - execution.Price;
             double target;
-            if (FixedTakeProfitTicks > 0)
+            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0 && sharedShortTakeProfit > 0)
             {
-                target = execution.Price - FixedTakeProfitTicks * TickSize;
+                stopPrice = sharedShortStopLoss;
+                target = sharedShortTakeProfit;
             }
             else
             {
-                target = execution.Price - risk;
+                if (FixedStopLossTicks > 0)
+                {
+                    stopPrice = execution.Price + FixedStopLossTicks * TickSize;
+                }
+                else
+                {
+                    stopPrice = intendedShortStop;
+                    if (execution.Price >= stopPrice)
+                    {
+                        ExitShort(1, "", execution.Order.Name);
+                        return;
+                    }
+                }
+                double risk = stopPrice - execution.Price;
+                if (FixedTakeProfitTicks > 0)
+                {
+                    target = execution.Price - FixedTakeProfitTicks * TickSize;
+                }
+                else
+                {
+                    target = execution.Price - risk;
+                }
+                sharedShortStopLoss = stopPrice;
+                sharedShortTakeProfit = target;
             }
             SetStopLoss(execution.Order.Name, CalculationMode.Price, stopPrice, false);
             SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
+            Print($"Short execution at {execution.Price}, Stop: {stopPrice}, Target: {target}");
         }
 
         private void ProcessBullishFVGExecution(Execution execution)
         {
-            double stopLevel;
-            if (FixedStopLossTicks > 0)
-            {
-                stopLevel = execution.Price - FixedStopLossTicks * TickSize;
-            }
-            else
-            {
-                stopLevel = recentLow;
-            }
-            double risk = execution.Price - stopLevel;
+            double stopPrice;
             double target;
-            if (FixedTakeProfitTicks > 0)
+            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0 && sharedLongTakeProfit > 0)
             {
-                target = execution.Price + FixedTakeProfitTicks * TickSize;
+                stopPrice = sharedLongStopLoss;
+                target = sharedLongTakeProfit;
             }
             else
             {
-                target = execution.Price + risk;
+                if (FixedStopLossTicks > 0)
+                {
+                    stopPrice = execution.Price - FixedStopLossTicks * TickSize;
+                }
+                else
+                {
+                    stopPrice = recentLow;
+                }
+                double risk = execution.Price - stopPrice;
+                if (FixedTakeProfitTicks > 0)
+                {
+                    target = execution.Price + FixedTakeProfitTicks * TickSize;
+                }
+                else
+                {
+                    target = execution.Price + risk;
+                }
+                sharedLongStopLoss = stopPrice;
+                sharedLongTakeProfit = target;
             }
-            SetStopLoss(execution.Order.Name, CalculationMode.Price, stopLevel, false);
+            SetStopLoss(execution.Order.Name, CalculationMode.Price, stopPrice, false);
             SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
-            Print($"BullishFVG1Min filled at {execution.Price}, Stop: {stopLevel}, Target: {target}");
+            Print($"BullishFVG1Min filled at {execution.Price}, Stop: {stopPrice}, Target: {target}");
         }
 
         private void ProcessBearishFVGExecution(Execution execution)
         {
-            double stopLevel;
-            if (FixedStopLossTicks > 0)
-            {
-                stopLevel = execution.Price + FixedStopLossTicks * TickSize;
-            }
-            else
-            {
-                stopLevel = recentHigh;
-            }
-            double risk = stopLevel - execution.Price;
+            double stopPrice;
             double target;
-            if (FixedTakeProfitTicks > 0)
+            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0 && sharedShortTakeProfit > 0)
             {
-                target = execution.Price - FixedTakeProfitTicks * TickSize;
+                stopPrice = sharedShortStopLoss;
+                target = sharedShortTakeProfit;
             }
             else
             {
-                target = execution.Price - risk;
+                if (FixedStopLossTicks > 0)
+                {
+                    stopPrice = execution.Price + FixedStopLossTicks * TickSize;
+                }
+                else
+                {
+                    stopPrice = recentHigh;
+                }
+                double risk = stopPrice - execution.Price;
+                if (FixedTakeProfitTicks > 0)
+                {
+                    target = execution.Price - FixedTakeProfitTicks * TickSize;
+                }
+                else
+                {
+                    target = execution.Price - risk;
+                }
+                sharedShortStopLoss = stopPrice;
+                sharedShortTakeProfit = target;
             }
-            SetStopLoss(execution.Order.Name, CalculationMode.Price, stopLevel, false);
+            SetStopLoss(execution.Order.Name, CalculationMode.Price, stopPrice, false);
             SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
-            Print($"BearishFVG1Min filled at {execution.Price}, Stop: {stopLevel}, Target: {target}");
+            Print($"BearishFVG1Min filled at {execution.Price}, Stop: {stopPrice}, Target: {target}");
         }
 
         private void DrawTradeSetupLabel()
@@ -1249,13 +1316,13 @@ namespace NinjaTrader.NinjaScript.Strategies
         private void DrawSwingHigh1M(int barsAgo)
         {
             Draw.Line(this, highLineTag, false, barsAgo, recentHigh, -100, recentHigh,
-                     Brushes.LimeGreen, DashStyleHelper.Dash, 1);
+                     Brushes.Pink, DashStyleHelper.Dot, 1);
         }
 
         private void DrawSwingLow1M(int barsAgo)
         {
             Draw.Line(this, lowLineTag, false, barsAgo, recentLow, -100, recentLow,
-                     Brushes.Crimson, DashStyleHelper.Dash, 1);
+                     Brushes.Pink, DashStyleHelper.Dot, 1);
         }
 
         private void DrawLevels5M()
@@ -1273,7 +1340,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     {
                         int barsAgoPrim = CurrentBar - barIndex;
                         Draw.Line(this, highLineTag5M, false, barsAgoPrim, recentHigh5M, -100, recentHigh5M,
-                                 Brushes.DarkGreen, DashStyleHelper.Dot, 1);
+                                 Brushes.DarkGreen, DashStyleHelper.DashDot, 1);
                     }
                 }
             }
@@ -1281,14 +1348,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             {
                 int barsAgoSec = CurrentBars[1] - swingLowBarNumber5M;
                 if (barsAgoSec >= 0)
-                {
+                {   
                     DateTime swingTime = Times[1][barsAgoSec];
                     int barIndex = Bars.GetBar(swingTime);
                     if (barIndex >= 0)
                     {
                         int barsAgoPrim = CurrentBar - barIndex;
                         Draw.Line(this, lowLineTag5M, false, barsAgoPrim, recentLow5M, -100, recentLow5M,
-                                 Brushes.DarkRed, DashStyleHelper.Dot, 1);
+                                 Brushes.DarkRed, DashStyleHelper.DashDot, 1);
                     }
                 }
             }
