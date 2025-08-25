@@ -38,6 +38,8 @@ namespace NinjaTrader.NinjaScript.Strategies
         private readonly string tradeSetupLabel = "TradeSetupLabel";
         private string currentTradeSetup = "";
         private readonly string tradingStatusLabel = "TradingStatusLabel";
+        private bool triggerBullish1M = false;
+        private bool triggerBearish1M = false;
 
         // 5M variables
         private double recentHigh5M;
@@ -56,6 +58,9 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int fvgHighFillBarNumber5M = -1;
         private readonly string fvgLowFillArrowTag5M = "FVGLowFillArrow5M";
         private readonly string fvgHighFillArrowTag5M = "FVGHighFillArrow5M";
+        private bool triggerBullish5M = false;
+        private bool triggerBearish5M = false;
+
 
         // 1H variables
         private double recentHigh1H;
@@ -172,14 +177,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                 Description = @"Scalper strategy with unique OCO IDs, FVG detection, and customizable trading restrictions";
                 Name = "xScapler";
                 Calculate = Calculate.OnBarClose;
-                EntriesPerDirection = 99; // Set high to allow multiple without auto-reverse
+                EntriesPerDirection = 99;
                 EntryHandling = EntryHandling.AllEntries;
                 IsExitOnSessionCloseStrategy = true;
                 ExitOnSessionCloseSeconds = 30;
                 IsInstantiatedOnEachOptimizationIteration = false;
                 DefaultQuantity = 1;
 
-                // Default values
                 MaxTradesPerDay = 2;
                 MaxDailyProfitPct = 2.0;
                 MaxDailyLossPct = 1.0;
@@ -196,9 +200,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 FixedTakeProfitTicks = 0;
                 AsiaSessionStart = "00:00";
                 AsiaSessionEnd = "07:00";
-                BarsRequiredToTrade = 50; // Increased from 20 to 50
+                BarsRequiredToTrade = 3600; // 3600 1M bars = 720 5M bars = 60 1H bars
                 IsInstantiatedOnEachOptimizationIteration = true;
-
             }
             else if (State == State.Configure)
             {
@@ -206,22 +209,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                 AddDataSeries(BarsPeriodType.Minute, 60); // 1H timeframe
 
                 // Validate user inputs
-                if (MaxTradesPerDay < 1)
-                    MaxTradesPerDay = 2;
-                if (MaxDailyProfitPct < 1.0)
-                    MaxDailyProfitPct = 2.0;
-                if (MaxDailyLossPct < 1.0)
-                    MaxDailyLossPct = 1.0;
-                if (MaxRiskPerTradePct < 1.0)
-                    MaxRiskPerTradePct = 1.0;
-                if (MaxMorningSessionLosses < 0)
-                    MaxMorningSessionLosses = 3;
-                if (MaxAfternoonSessionLosses < 0)
-                    MaxAfternoonSessionLosses = 3;
-                if (MaxMorningSessionWins < 0)
-                    MaxMorningSessionWins = 1;
-                if (MaxAfternoonSessionWins < 0)
-                    MaxAfternoonSessionWins = 1;
+                if (MaxTradesPerDay < 1) MaxTradesPerDay = 2;
+                if (MaxDailyProfitPct < 1.0) MaxDailyProfitPct = 2.0;
+                if (MaxDailyLossPct < 1.0) MaxDailyLossPct = 1.0;
+                if (MaxRiskPerTradePct < 1.0) MaxRiskPerTradePct = 1.0;
+                if (MaxMorningSessionLosses < 0) MaxMorningSessionLosses = 3;
+                if (MaxAfternoonSessionLosses < 0) MaxAfternoonSessionLosses = 3;
+                if (MaxMorningSessionWins < 0) MaxMorningSessionWins = 1;
+                if (MaxAfternoonSessionWins < 0) MaxAfternoonSessionWins = 1;
                 if (!ValidateTimeFormat(MorningSessionStart)) MorningSessionStart = "09:00";
                 if (!ValidateTimeFormat(MorningSessionEnd)) MorningSessionEnd = "11:00";
                 if (!ValidateTimeFormat(AfternoonSessionStart)) AfternoonSessionStart = "14:00";
@@ -237,6 +232,12 @@ namespace NinjaTrader.NinjaScript.Strategies
                 tradeCountToday = 0;
                 consecutiveLosses = 0;
                 openEntries.Clear();
+                triggerBullish1M = false;
+                triggerBearish1M = false;
+                triggerBullish5M = false;
+                triggerBearish5M = false;
+                fvgLowFillBarNumber5M = -1;
+                fvgHighFillBarNumber5M = -1;
                 Print($"State.DataLoaded: Initialized lastDay={lastDay}, tradeCountToday={tradeCountToday}");
             }
         }
@@ -287,25 +288,30 @@ namespace NinjaTrader.NinjaScript.Strategies
             string reason;
             bool isTradingAllowed = TradingIsAllowed(out reason);
             Print($"OnBarUpdate at {Time[0]}: tradeCountToday={tradeCountToday}, MaxTradesPerDay={MaxTradesPerDay}, TradingAllowed={isTradingAllowed}, Reason={reason}");
-            if (CurrentBar < BarsRequiredToTrade)
-                return;
-            if (BarsInProgress == 0 ) // 1M timeframe
-            {
-                if (CurrentBars[0] < 2) return;
 
-                DetectSwingPoints1M();
-                DetectFVG1M();
+            // Ensure enough bars for all data series
+            if (CurrentBar < BarsRequiredToTrade || CurrentBars[1] < 3 || CurrentBars[2] < 3)
+            {
+                Print($"Skipping OnBarUpdate: CurrentBar={CurrentBar}, CurrentBars[1]={CurrentBars[1]}, CurrentBars[2]={CurrentBars[2]}");
+                return;
+            }
+
+            if (BarsInProgress == 0) // 1M timeframe
+            {
                 DetectSwingPoints5M();
                 DetectFVG5M();
+                DetectBreakOfStructure5M();
                 DetectSwingPoints1H();
                 DetectFVG1H();
+                DetectSwingPoints1M();
+                DetectFVG1M();
                 DetectFVG5MFill();
                 DetectFVG1HFill();
                 DrawLevels1M();
                 DrawFVG1M();
                 DetectBreakOfStructure1M();
-                BullishFVG1Min();
-                BearishFVG1Min();
+                BullishFVG5Min();
+                BearishFVG5Min();
                 DrawLevels5M();
                 DrawFVG5M();
                 DrawLevels1H();
@@ -313,6 +319,26 @@ namespace NinjaTrader.NinjaScript.Strategies
                 DrawAsiaSessionLevels();
                 DrawTradeSetupLabel();
                 DrawTradingStatus();
+            }
+
+            if (triggerBullish5M)
+            {
+                //BullishBreakout5Min();
+            }
+            if (triggerBearish5M)
+            {
+                //BearishBreakout5Min();
+            }
+
+            if (triggerBullish1M)
+            {
+                //BullishBreakout1Min();
+                triggerBullish1M = false;
+            }
+            if (triggerBearish1M)
+            {
+                //BearishBreakout1Min();
+                triggerBearish1M = false;
             }
 
             // Process completed trades for win/loss tracking
@@ -329,7 +355,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                     if (pnL > 0)
                     {
-                        consecutiveLosses = 0; // Reset on win
+                        consecutiveLosses = 0;
                         if (isMorningSession)
                             morningSessionWins++;
                         else if (isAfternoonSession)
@@ -338,7 +364,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     }
                     else if (pnL < 0)
                     {
-                        consecutiveLosses++; // Increment on loss
+                        consecutiveLosses++;
                         if (consecutiveLosses >= 7)
                             consecutiveLosses = 0;
                         if (isMorningSession)
@@ -361,7 +387,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                 sharedShortTakeProfit = 0;
             }
         }
-
         private bool TradingIsAllowed(out string reason)
         {
             if (true)
@@ -469,6 +494,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void DetectSwingPoints5M()
         {
+            if (CurrentBars[1] < 3)
+            {
+                Print($"DetectSwingPoints5M skipped: CurrentBars[1]={CurrentBars[1]} < 3");
+                return;
+            }
+
             if (Closes[1][1] > Opens[1][1] && Closes[1][0] < Opens[1][0])
             {
                 double high1 = Highs[1][1];
@@ -476,6 +507,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentHigh5M = Math.Max(high1, high0);
                 int offset = (high1 > high0) ? 1 : 0;
                 swingHighBarNumber5M = CurrentBars[1] - offset;
+                Print($"5M Swing High detected at 5M bar {swingHighBarNumber5M}, Price: {recentHigh5M}, Time: {Times[1][offset]}, 1M Bar: {CurrentBar}");
             }
             if (Closes[1][1] < Opens[1][1] && Closes[1][0] > Opens[1][0])
             {
@@ -484,13 +516,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentLow5M = Math.Min(low1, low0);
                 int offset = (low1 < low0) ? 1 : 0;
                 swingLowBarNumber5M = CurrentBars[1] - offset;
+                Print($"5M Swing Low detected at 5M bar {swingLowBarNumber5M}, Price: {recentLow5M}, Time: {Times[1][offset]}, 1M Bar: {CurrentBar}");
             }
             if (recentHigh5M == 0)
                 FindRecentSwingHigh5M();
             if (recentLow5M == double.MaxValue)
                 FindRecentSwingLow5M();
         }
-
         private void FindRecentSwingHigh5M()
         {
             for (int barsAgo = 1; barsAgo < CurrentBars[1]; barsAgo++)
@@ -521,6 +553,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void DetectSwingPoints1H()
         {
+            if (CurrentBars[2] < 3)
+            {
+                Print($"DetectSwingPoints1H skipped: CurrentBars[2]={CurrentBars[2]} < 3");
+                return;
+            }
+
             if (Closes[2][1] > Opens[2][1] && Closes[2][0] < Opens[2][0])
             {
                 double high1 = Highs[2][1];
@@ -528,6 +566,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentHigh1H = Math.Max(high1, high0);
                 int offset = (high1 > high0) ? 1 : 0;
                 swingHighBarNumber1H = CurrentBars[2] - offset;
+                Print($"1H Swing High detected at 1H bar {swingHighBarNumber1H}, Price: {recentHigh1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}");
             }
             if (Closes[2][1] < Opens[2][1] && Closes[2][0] > Opens[2][0])
             {
@@ -536,13 +575,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentLow1H = Math.Min(low1, low0);
                 int offset = (low1 < low0) ? 1 : 0;
                 swingLowBarNumber1H = CurrentBars[2] - offset;
+                Print($"1H Swing Low detected at 1H bar {swingLowBarNumber1H}, Price: {recentLow1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}");
             }
             if (recentHigh1H == 0)
                 FindRecentSwingHigh1H();
             if (recentLow1H == double.MaxValue)
                 FindRecentSwingLow1H();
         }
-
         private void FindRecentSwingHigh1H()
         {
             for (int barsAgo = 1; barsAgo < CurrentBars[2]; barsAgo++)
@@ -975,11 +1014,24 @@ namespace NinjaTrader.NinjaScript.Strategies
         private void DetectBreakOfStructure1M()
         {
             if (Close[0] > recentHigh && Close[1] <= recentHigh)
-                BullishBreakout1Min();
-            if (Close[0] < recentLow && Close[1] >= recentLow)
-                BearishBreakout1Min();
-        }
+                triggerBullish1M = true;
 
+            //BullishBreakout1Min();
+            if (Close[0] < recentLow && Close[1] >= recentLow)
+                triggerBearish1M = true;
+
+            //BearishBreakout1Min();
+        }
+        private void DetectBreakOfStructure5M()
+        {
+            if (CurrentBars[1] < 1) return;
+
+            if (Closes[1][0] > recentHigh5M && Closes[1][1] <= recentHigh5M)
+                triggerBullish5M = true;
+
+            if (Closes[1][0] < recentLow5M && Closes[1][1] >= recentLow5M)
+                triggerBearish5M = true;
+        }
         private void BullishBreakout1Min()
         {
             if (State == State.Historical)
@@ -1087,7 +1139,242 @@ namespace NinjaTrader.NinjaScript.Strategies
             currentTradeSetup = "1M Bearish Breakout";
             Print($"Entered short (Bearish Breakout) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
         }
+        private void BullishBreakout5Min()
+        {
+            if (State == State.Historical)
+                return;
 
+            if (Position.MarketPosition == MarketPosition.Short) return;
+            if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
+
+            string reason;
+            if (!TradingIsAllowed(out reason))
+            {
+                Print($"Cannot enter long (5M Bullish Breakout): {reason}");
+                return;
+            }
+
+            double entryApprox = Close[0];
+            double riskPoints;
+            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
+            {
+                riskPoints = entryApprox - sharedLongStopLoss;
+            }
+            else if (FixedStopLossTicks > 0)
+            {
+                riskPoints = FixedStopLossTicks * TickSize;
+                intendedLongStop = entryApprox - riskPoints;
+            }
+            else
+            {
+                intendedLongStop = recentLow5M;
+                riskPoints = entryApprox - intendedLongStop;
+            }
+
+            int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+            double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+            int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+            if (adjustedQuantity < 1)
+            {
+                Print($"Cannot enter long (5M Bullish Breakout): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                return;
+            }
+            double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+            double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+            if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+            {
+                Print($"Cannot enter long (5M Bullish Breakout): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                return;
+            }
+            string uniqueId = Guid.NewGuid().ToString("N");
+            EnterLong(adjustedQuantity, $"LongEntry5M_{uniqueId}");
+            tradeCountToday++;
+            currentTradeSetup = "5M Bullish Breakout";
+            Print($"Entered long (5M Bullish Breakout) at {Close[0]}, Stop: {intendedLongStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
+            triggerBullish5M = false; // Moved here
+        }
+        private void BearishBreakout5Min()
+        {
+            if (State == State.Historical)
+                return;
+
+            if (Position.MarketPosition == MarketPosition.Long) return;
+            if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
+
+            string reason;
+            if (!TradingIsAllowed(out reason))
+            {
+                Print($"Cannot enter short (5M Bearish Breakout): {reason}");
+                return;
+            }
+
+            double entryApprox = Close[0];
+            double riskPoints;
+            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
+            {
+                riskPoints = sharedShortStopLoss - entryApprox;
+            }
+            else if (FixedStopLossTicks > 0)
+            {
+                riskPoints = FixedStopLossTicks * TickSize;
+                intendedShortStop = entryApprox + riskPoints;
+            }
+            else
+            {
+                intendedShortStop = recentHigh5M;
+                riskPoints = intendedShortStop - entryApprox;
+            }
+
+            int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+            double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+            int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+            if (adjustedQuantity < 1)
+            {
+                Print($"Cannot enter short (5M Bearish Breakout): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                return;
+            }
+            double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+            double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+            if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+            {
+                Print($"Cannot enter short (5M Bearish Breakout): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                return;
+            }
+            string uniqueId = Guid.NewGuid().ToString("N");
+            EnterShort(adjustedQuantity, $"ShortEntry5M_{uniqueId}");
+            tradeCountToday++;
+            currentTradeSetup = "5M Bearish Breakout";
+            Print($"Entered short (5M Bearish Breakout) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
+            triggerBearish5M = false; // Moved here
+        }
+        private void BullishFVG5Min()
+        {
+            if (State == State.Historical) return;
+            if (BarsArray[1] == null || CurrentBars[1] < 2) return; // Ensure 5M data is available
+            if (fvgLowFillBarNumber5M > 0)
+            {
+                if (Position.MarketPosition == MarketPosition.Short) return;
+                if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
+
+                int fillBarsAgo = CurrentBars[1] - fvgLowFillBarNumber5M;
+                if (fillBarsAgo >= 0 && fillBarsAgo < CurrentBars[1])
+                {
+                    double touchCandleHigh = Highs[1][fillBarsAgo];
+                    if (Close[0] > touchCandleHigh && Close[1] <= touchCandleHigh)
+                    {
+                        string reason;
+                        if (!TradingIsAllowed(out reason))
+                        {
+                            Print($"Cannot enter long (5M Bullish FVG): {reason}");
+                            return;
+                        }
+                        double entryApprox = Close[0];
+                        double riskPoints;
+                        if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
+                        {
+                            riskPoints = entryApprox - sharedLongStopLoss;
+                        }
+                        else if (FixedStopLossTicks > 0)
+                        {
+                            riskPoints = FixedStopLossTicks * TickSize;
+                        }
+                        else
+                        {
+                            riskPoints = entryApprox - recentLow5M;
+                        }
+                        int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+                        double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+                        double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+                        double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+                        int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+                        if (adjustedQuantity < 1)
+                        {
+                            Print($"Cannot enter long (5M Bullish FVG): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                            return;
+                        }
+                        double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+                        double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+                        if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+                        {
+                            Print($"Cannot enter long (5M Bullish FVG): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                            return;
+                        }
+                        string uniqueId = Guid.NewGuid().ToString("N");
+                        EnterLong(adjustedQuantity, $"BullishFVG5Min_{uniqueId}");
+                        tradeCountToday++;
+                        currentTradeSetup = "5M Bullish FVG";
+                        Print($"Entered long (5M Bullish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
+                    }
+                }
+            }
+        }
+
+        // Update BearishFVG5Min to handle 1M chart case
+        private void BearishFVG5Min()
+        {
+            if (State == State.Historical) return;
+            if (BarsArray[1] == null || CurrentBars[1] < 2) return; // Ensure 5M data is available
+            if (fvgHighFillBarNumber5M > 0)
+            {
+                if (Position.MarketPosition == MarketPosition.Long) return;
+                if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
+
+                int fillBarsAgo = CurrentBars[1] - fvgHighFillBarNumber5M;
+                if (fillBarsAgo >= 0 && fillBarsAgo < CurrentBars[1])
+                {
+                    double touchCandleLow = Lows[1][fillBarsAgo];
+                    if (Close[0] < touchCandleLow && Close[1] >= touchCandleLow)
+                    {
+                        string reason;
+                        if (!TradingIsAllowed(out reason))
+                        {
+                            Print($"Cannot enter short (5M Bearish FVG): {reason}");
+                            return;
+                        }
+                        double entryApprox = Close[0];
+                        double riskPoints;
+                        if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
+                        {
+                            riskPoints = sharedShortStopLoss - entryApprox;
+                        }
+                        else if (FixedStopLossTicks > 0)
+                        {
+                            riskPoints = FixedStopLossTicks * TickSize;
+                        }
+                        else
+                        {
+                            riskPoints = recentHigh5M - entryApprox;
+                        }
+                        int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+                        double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+                        double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+                        double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+                        int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+                        if (adjustedQuantity < 1)
+                        {
+                            Print($"Cannot enter short (5M Bearish FVG): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                            return;
+                        }
+                        double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+                        double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+                        if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+                        {
+                            Print($"Cannot enter short (5M Bearish FVG): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                            return;
+                        }
+                        string uniqueId = Guid.NewGuid().ToString("N");
+                        EnterShort(adjustedQuantity, $"BearishFVG5Min_{uniqueId}");
+                        tradeCountToday++;
+                        currentTradeSetup = "5M Bearish FVG";
+                        Print($"Entered short (5M Bearish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
+                    }
+                }
+            }
+        }
         private void BullishFVG1Min()
         {
             if (State == State.Historical)
@@ -1150,7 +1437,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
             }
         }
-
         private void BearishFVG1Min()
         {
             if (State == State.Historical)
@@ -1239,6 +1525,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                 ProcessBullishFVGExecution(execution);
             else if (execution.Order.Name.StartsWith("BearishFVG1Min"))
                 ProcessBearishFVGExecution(execution);
+            else if (execution.Order.Name.StartsWith("LongEntry5M"))
+                ProcessLongExecution(execution);
+            else if (execution.Order.Name.StartsWith("ShortEntry5M"))
+                ProcessShortExecution(execution);
+            else if (execution.Order.Name.StartsWith("BullishFVG5Min"))
+                ProcessBullishFVG5MExecution(execution);
+            else if (execution.Order.Name.StartsWith("BearishFVG5Min"))
+                ProcessBearishFVG5MExecution(execution);
         }
 
         private void ProcessLongExecution(Execution execution)
@@ -1394,16 +1688,83 @@ namespace NinjaTrader.NinjaScript.Strategies
             SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
             Print($"BearishFVG1Min filled at {execution.Price}, Stop: {stopPrice}, Target: {target}");
         }
+        // Add new process methods after ProcessBearishFVGExecution()
+        private void ProcessBullishFVG5MExecution(Execution execution)
+        {
+            double stopPrice;
+            double target;
+            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0 && sharedLongTakeProfit > 0)
+            {
+                stopPrice = sharedLongStopLoss;
+                target = sharedLongTakeProfit;
+            }
+            else
+            {
+                if (FixedStopLossTicks > 0)
+                {
+                    stopPrice = execution.Price - FixedStopLossTicks * TickSize;
+                }
+                else
+                {
+                    stopPrice = recentLow5M;
+                }
+                double risk = execution.Price - stopPrice;
+                if (FixedTakeProfitTicks > 0)
+                {
+                    target = execution.Price + FixedTakeProfitTicks * TickSize;
+                }
+                else
+                {
+                    target = execution.Price + risk;
+                }
+                sharedLongStopLoss = stopPrice;
+                sharedLongTakeProfit = target;
+            }
+            SetStopLoss(execution.Order.Name, CalculationMode.Price, stopPrice, false);
+            SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
+            Print($"BullishFVG5Min filled at {execution.Price}, Stop: {stopPrice}, Target: {target}");
+        }
 
+        private void ProcessBearishFVG5MExecution(Execution execution)
+        {
+            double stopPrice;
+            double target;
+            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0 && sharedShortTakeProfit > 0)
+            {
+                stopPrice = sharedShortStopLoss;
+                target = sharedShortTakeProfit;
+            }
+            else
+            {
+                if (FixedStopLossTicks > 0)
+                {
+                    stopPrice = execution.Price + FixedStopLossTicks * TickSize;
+                }
+                else
+                {
+                    stopPrice = recentHigh5M;
+                }
+                double risk = stopPrice - execution.Price;
+                if (FixedTakeProfitTicks > 0)
+                {
+                    target = execution.Price - FixedTakeProfitTicks * TickSize;
+                }
+                else
+                {
+                    target = execution.Price - risk;
+                }
+                sharedShortStopLoss = stopPrice;
+                sharedShortTakeProfit = target;
+            }
+            SetStopLoss(execution.Order.Name, CalculationMode.Price, stopPrice, false);
+            SetProfitTarget(execution.Order.Name, CalculationMode.Price, target, false);
+            Print($"BearishFVG5Min filled at {execution.Price}, Stop: {stopPrice}, Target: {target}");
+        }
         private void DrawTradeSetupLabel()
         {
             RemoveDrawObject(tradeSetupLabel);
-            if (!string.IsNullOrEmpty(currentTradeSetup))
-            {
-                Brush lightBlueBrush = new SolidColorBrush(Color.FromArgb(255, 173, 216, 230));
-                Draw.TextFixed(this, tradeSetupLabel, currentTradeSetup, TextPosition.TopRight,
-                    lightBlueBrush, new SimpleFont("Arial", 14), Brushes.Transparent, Brushes.Transparent, 100);
-            }
+            Draw.TextFixed(this, tradeSetupLabel, currentTradeSetup ?? "No Setup", TextPosition.TopRight,
+                Brushes.LightBlue, new SimpleFont("Arial", 14), Brushes.Transparent, Brushes.Transparent, 100);
         }
 
         private void DrawLevels1M()
