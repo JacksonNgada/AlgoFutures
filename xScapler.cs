@@ -75,6 +75,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         private readonly string fvgLowFillArrowTag1H = "FVGLowFillArrow1H";
         private readonly string fvgHighFillArrowTag1H = "FVGHighFillArrow1H";
 
+        // Asia session variables
+        private double asiaHigh;
+        private double asiaLow = double.MaxValue;
+        private int asiaHighBarNumber = -1;
+        private int asiaLowBarNumber = -1;
+        private readonly string asiaHighLineTag = "AsiaHighLine";
+        private readonly string asiaLowLineTag = "AsiaLowLine";
+
         // Session tracking variables
         private DateTime lastDay = DateTime.MinValue;
         private int morningSessionWins = 0;
@@ -149,6 +157,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         [Display(Name = "Fixed Take Profit (Ticks)", Description = "Fixed take profit in ticks (0 to use dynamic)", Order = 14, GroupName = "Trading Parameters")]
         public double FixedTakeProfitTicks { get; set; }
 
+        [NinjaScriptProperty]
+        [Display(Name = "Asia Session Start (HH:MM)", Description = "Asia session start time (HH:MM, 24-hour format)", Order = 15, GroupName = "Trading Parameters")]
+        public string AsiaSessionStart { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Asia Session End (HH:MM)", Description = "Asia session end time (HH:MM, 24-hour format)", Order = 16, GroupName = "Trading Parameters")]
+        public string AsiaSessionEnd { get; set; }
+
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
@@ -178,6 +194,11 @@ namespace NinjaTrader.NinjaScript.Strategies
                 AfternoonSessionEnd = "18:30";
                 FixedStopLossTicks = 0;
                 FixedTakeProfitTicks = 0;
+                AsiaSessionStart = "00:00";
+                AsiaSessionEnd = "07:00";
+                BarsRequiredToTrade = 50; // Increased from 20 to 50
+                IsInstantiatedOnEachOptimizationIteration = true;
+
             }
             else if (State == State.Configure)
             {
@@ -205,6 +226,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (!ValidateTimeFormat(MorningSessionEnd)) MorningSessionEnd = "11:00";
                 if (!ValidateTimeFormat(AfternoonSessionStart)) AfternoonSessionStart = "14:00";
                 if (!ValidateTimeFormat(AfternoonSessionEnd)) AfternoonSessionEnd = "18:30";
+                if (!ValidateTimeFormat(AsiaSessionStart)) AsiaSessionStart = "00:00";
+                if (!ValidateTimeFormat(AsiaSessionEnd)) AsiaSessionEnd = "07:00";
                 if (FixedStopLossTicks < 0) FixedStopLossTicks = 0;
                 if (FixedTakeProfitTicks < 0) FixedTakeProfitTicks = 0;
             }
@@ -212,6 +235,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             {
                 lastDay = DateTime.MinValue;
                 tradeCountToday = 0;
+                consecutiveLosses = 0;
+                openEntries.Clear();
                 Print($"State.DataLoaded: Initialized lastDay={lastDay}, tradeCountToday={tradeCountToday}");
             }
         }
@@ -228,6 +253,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             TimeSpan morningEnd = TimeSpan.Parse(MorningSessionEnd);
             TimeSpan afternoonStart = TimeSpan.Parse(AfternoonSessionStart);
             TimeSpan afternoonEnd = TimeSpan.Parse(AfternoonSessionEnd);
+            TimeSpan asiaStart = TimeSpan.Parse(AsiaSessionStart);
+            TimeSpan asiaEnd = TimeSpan.Parse(AsiaSessionEnd);
 
             // Reset daily stats at the start of a new trading day
             DateTime currentDay = Time[0].Date;
@@ -249,31 +276,29 @@ namespace NinjaTrader.NinjaScript.Strategies
                 sharedLongTakeProfit = 0;
                 sharedShortStopLoss = 0;
                 sharedShortTakeProfit = 0;
-                Print($"New trading day reset at {Time[0]}: lastDay={lastDay}, tradeCountToday={tradeCountToday}, all session stats cleared");
+                asiaHigh = 0;
+                asiaLow = double.MaxValue;
+                asiaHighBarNumber = -1;
+                asiaLowBarNumber = -1;
+                Print($"New trading day reset at {Time[0]}: lastDay={lastDay}, tradeCountToday={tradeCountToday}, all session stats cleared, Asia session reset");
             }
 
             // Log trading allowance status for debugging
             string reason;
             bool isTradingAllowed = TradingIsAllowed(out reason);
             Print($"OnBarUpdate at {Time[0]}: tradeCountToday={tradeCountToday}, MaxTradesPerDay={MaxTradesPerDay}, TradingAllowed={isTradingAllowed}, Reason={reason}");
-
-            if (BarsInProgress == 2) // 1H timeframe
-            {
-                if (CurrentBars[2] < 2) return;
-                DetectSwingPoints1H();
-                DetectFVG1H();
-            }
-            else if (BarsInProgress == 1) // 5M timeframe
-            {
-                if (CurrentBars[1] < 2) return;
-                DetectSwingPoints5M();
-                DetectFVG5M();
-            }
-            else if (BarsInProgress == 0) // 1M timeframe
+            if (CurrentBar < BarsRequiredToTrade)
+                return;
+            if (BarsInProgress == 0 ) // 1M timeframe
             {
                 if (CurrentBars[0] < 2) return;
+
                 DetectSwingPoints1M();
                 DetectFVG1M();
+                DetectSwingPoints5M();
+                DetectFVG5M();
+                DetectSwingPoints1H();
+                DetectFVG1H();
                 DetectFVG5MFill();
                 DetectFVG1HFill();
                 DrawLevels1M();
@@ -283,6 +308,9 @@ namespace NinjaTrader.NinjaScript.Strategies
                 BearishFVG1Min();
                 DrawLevels5M();
                 DrawFVG5M();
+                DrawLevels1H();
+                DetectAsiaSessionLevels();
+                DrawAsiaSessionLevels();
                 DrawTradeSetupLabel();
                 DrawTradingStatus();
             }
@@ -336,21 +364,24 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private bool TradingIsAllowed(out string reason)
         {
+            if (true)
+            {
+                reason = "Trading restrictions disabled";
+                return true;
+            }
             var reasons = new List<string>();
             TimeSpan currentTime = Time[0].TimeOfDay;
             TimeSpan morningStart = TimeSpan.Parse(MorningSessionStart);
             TimeSpan morningEnd = TimeSpan.Parse(MorningSessionEnd);
             TimeSpan afternoonStart = TimeSpan.Parse(AfternoonSessionStart);
             TimeSpan afternoonEnd = TimeSpan.Parse(AfternoonSessionEnd);
-            bool isMorningSession = currentTime >= morningStart && currentTime <= morningEnd;
-            bool isAfternoonSession = currentTime >= afternoonStart && currentTime <= afternoonEnd;
 
             // Log current state for debugging
             double pnL = GetDailyPnL();
             Print($"TradingIsAllowed check at {Time[0]}: MorningWins={morningSessionWins}, MorningLosses={morningSessionLosses}, AfternoonWins={afternoonSessionWins}, AfternoonLosses={afternoonSessionLosses}, TradeCountToday={tradeCountToday}, PnL={pnL}");
 
             // Check session time restrictions
-            if (!isMorningSession && !isAfternoonSession)
+            if (!((currentTime >= morningStart && currentTime <= morningEnd) || (currentTime >= afternoonStart && currentTime <= afternoonEnd)))
                 reasons.Add($"Outside trading sessions ({MorningSessionStart}–{MorningSessionEnd} or {AfternoonSessionStart}–{AfternoonSessionEnd} SAST)");
 
             // Check max trades per day
@@ -367,14 +398,14 @@ namespace NinjaTrader.NinjaScript.Strategies
                 reasons.Add($"Daily loss limit ({MaxDailyLossPct}% = {maxLoss:F2}) reached");
 
             // Check session win/loss caps
-            if (isMorningSession)
+            if (currentTime >= morningStart && currentTime <= morningEnd)
             {
                 if (morningSessionWins >= MaxMorningSessionWins)
                     reasons.Add($"Morning session win limit ({MaxMorningSessionWins}) reached");
                 if (morningSessionLosses >= MaxMorningSessionLosses)
                     reasons.Add($"Morning session loss limit ({MaxMorningSessionLosses}) reached");
             }
-            else if (isAfternoonSession)
+            else if (currentTime >= afternoonStart && currentTime <= afternoonEnd)
             {
                 if (afternoonSessionWins >= MaxAfternoonSessionWins)
                     reasons.Add($"Afternoon session win limit ({MaxAfternoonSessionWins}) reached");
@@ -539,6 +570,68 @@ namespace NinjaTrader.NinjaScript.Strategies
                 break;
             }
         }
+
+        private void DetectAsiaSessionLevels()
+        {
+            TimeSpan currentTime = Time[0].TimeOfDay;
+            TimeSpan asiaStart = TimeSpan.Parse(AsiaSessionStart);
+            TimeSpan asiaEnd = TimeSpan.Parse(AsiaSessionEnd);
+            bool isAsiaSession = currentTime >= asiaStart && currentTime <= asiaEnd;
+
+            if (isAsiaSession)
+            {
+                if (High[0] > asiaHigh)
+                {
+                    asiaHigh = High[0];
+                    asiaHighBarNumber = CurrentBar;
+                    Print($"Asia High updated at {Time[0]}: {asiaHigh}, Bar: {asiaHighBarNumber}");
+                }
+                if (Low[0] < asiaLow)
+                {
+                    asiaLow = Low[0];
+                    asiaLowBarNumber = CurrentBar;
+                    Print($"Asia Low updated at {Time[0]}: {asiaLow}, Bar: {asiaLowBarNumber}");
+                }
+            }
+        }
+
+        private void DrawAsiaSessionLevels()
+        {
+            RemoveDrawObject(asiaHighLineTag);
+            RemoveDrawObject(asiaLowLineTag);
+
+            TimeSpan asiaStart = TimeSpan.Parse(AsiaSessionStart); // 00:00 SAST
+            TimeSpan asiaEnd = TimeSpan.Parse(AsiaSessionEnd);     // 07:00 SAST
+            DateTime currentDay = Time[0].Date;
+            DateTime sessionStartTime = currentDay + asiaStart;
+            DateTime sessionEndTime = currentDay + asiaEnd;
+
+            int startBarIndex = Bars.GetBar(sessionStartTime);
+            int endBarIndex = Time[0].TimeOfDay <= asiaEnd ? CurrentBar : Bars.GetBar(sessionEndTime);
+
+            if (startBarIndex >= 0 && endBarIndex >= 0 && startBarIndex <= CurrentBar && endBarIndex <= CurrentBar)
+            {
+                int startBarsAgo = CurrentBar - startBarIndex;
+                int endBarsAgo = CurrentBar - endBarIndex;
+
+                if (asiaHigh > 0)
+                {
+                    Draw.Line(this, asiaHighLineTag, false, startBarsAgo, asiaHigh, endBarsAgo, asiaHigh,
+                             Brushes.Pink, DashStyleHelper.DashDot, 1);
+                    Print($"Drawing Asia High at {asiaHigh}, from barsAgo: {startBarsAgo} to {endBarsAgo}");
+                    Draw.Text(this, "AsiaHighLabel", "Asia High", startBarsAgo - 5, asiaHigh + 15 * TickSize, Brushes.Gray);
+                }
+                if (asiaLow < double.MaxValue)
+                {
+                    Draw.Line(this, asiaLowLineTag, false, startBarsAgo, asiaLow, endBarsAgo, asiaLow,
+                             Brushes.Pink, DashStyleHelper.DashDot, 1);
+                    Print($"Drawing Asia Low at {asiaLow}, from barsAgo: {startBarsAgo} to {endBarsAgo}");
+                    Draw.Text(this, "AsiaLowLabel", "Asia Low", startBarsAgo - 5, asiaLow - 15 * TickSize, Brushes.Gray);
+
+                }
+            }
+        }
+
 
         private void DetectFVG1M()
         {
@@ -889,6 +982,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void BullishBreakout1Min()
         {
+            if (State == State.Historical)
+                return; // Skip historical processing
+
             if (Position.MarketPosition == MarketPosition.Short) return;
             if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
 
@@ -940,6 +1036,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void BearishBreakout1Min()
         {
+            if (State == State.Historical)
+                return; // Skip historical processing
+
             if (Position.MarketPosition == MarketPosition.Long) return;
             if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
 
@@ -991,6 +1090,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void BullishFVG1Min()
         {
+            if (State == State.Historical)
+                return; // Skip historical processing
+
             if (fvgLowFillBarNumber > 0)
             {
                 if (Position.MarketPosition == MarketPosition.Short) return;
@@ -1051,6 +1153,9 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void BearishFVG1Min()
         {
+            if (State == State.Historical)
+                return; // Skip historical processing
+
             if (fvgHighFillBarNumber > 0)
             {
                 if (Position.MarketPosition == MarketPosition.Long) return;
@@ -1348,7 +1453,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             {
                 int barsAgoSec = CurrentBars[1] - swingLowBarNumber5M;
                 if (barsAgoSec >= 0)
-                {   
+                {
                     DateTime swingTime = Times[1][barsAgoSec];
                     int barIndex = Bars.GetBar(swingTime);
                     if (barIndex >= 0)
