@@ -60,7 +60,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         private readonly string fvgHighFillArrowTag5M = "FVGHighFillArrow5M";
         private bool triggerBullish5M = false;
         private bool triggerBearish5M = false;
-
+        private bool swingHighTouched5M = false;
+        private bool swingLowTouched5M = false;
+        private int swingHighTouchBarNumber5M = -1;
+        private int swingLowTouchBarNumber5M = -1;
+        private readonly string swingHighTouchIconTag5M = "SwingHighTouchIcon5M_";
+        private readonly string swingLowTouchIconTag5M = "SwingLowTouchIcon5M_";
+        private bool bullishBreakout1MTriggered = false;
+        private bool bearishBreakout1MTriggered = false;
 
         // 1H variables
         private double recentHigh1H;
@@ -79,6 +86,12 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int fvgHighFillBarNumber1H = -1;
         private readonly string fvgLowFillArrowTag1H = "FVGLowFillArrow1H";
         private readonly string fvgHighFillArrowTag1H = "FVGHighFillArrow1H";
+        private bool swingHighTouched1H = false;
+        private bool swingLowTouched1H = false;
+        private int swingHighTouchBarNumber1H = -1;
+        private int swingLowTouchBarNumber1H = -1;
+        private readonly string swingHighTouchIconTag = "SwingHighTouchIcon_";
+        private readonly string swingLowTouchIconTag = "SwingLowTouchIcon_";
 
         // Asia session variables
         private double asiaHigh;
@@ -104,6 +117,15 @@ namespace NinjaTrader.NinjaScript.Strategies
         private double sharedLongTakeProfit = 0;
         private double sharedShortStopLoss = 0;
         private double sharedShortTakeProfit = 0;
+
+
+        // Variables for scale-in tracking
+        private int bullishScaleInCount = 0;
+        private int bearishScaleInCount = 0;
+        private bool bullishFVG5MTriggered = false;
+        private bool bearishFVG5MTriggered = false;
+        private bool bullishBreakout5MTriggered = false;
+        private bool bearishBreakout5MTriggered = false;
 
         // User input properties
         [NinjaScriptProperty]
@@ -238,6 +260,12 @@ namespace NinjaTrader.NinjaScript.Strategies
                 triggerBearish5M = false;
                 fvgLowFillBarNumber5M = -1;
                 fvgHighFillBarNumber5M = -1;
+                swingHighTouched5M = false;
+                swingLowTouched5M = false;
+                swingHighTouchBarNumber5M = -1;
+                swingLowTouchBarNumber5M = -1;
+                bullishBreakout1MTriggered = false;
+                bearishBreakout1MTriggered = false;
                 Print($"State.DataLoaded: Initialized lastDay={lastDay}, tradeCountToday={tradeCountToday}");
             }
         }
@@ -304,14 +332,16 @@ namespace NinjaTrader.NinjaScript.Strategies
                 DetectSwingPoints1H();
                 DetectFVG1H();
                 DetectSwingPoints1M();
+                DrawFVG1M();
                 DetectFVG1M();
                 DetectFVG5MFill();
                 DetectFVG1HFill();
                 DrawLevels1M();
-                DrawFVG1M();
                 DetectBreakOfStructure1M();
-                BullishFVG5Min();
-                BearishFVG5Min();
+                //BullishFVG1Min();
+                //BearishFVG1Min();
+                //BullishFVG5Min();
+                //BearishFVG5Min();
                 DrawLevels5M();
                 DrawFVG5M();
                 DrawLevels1H();
@@ -319,8 +349,28 @@ namespace NinjaTrader.NinjaScript.Strategies
                 DrawAsiaSessionLevels();
                 DrawTradeSetupLabel();
                 DrawTradingStatus();
+                DetectSwingTouch1H(); // Add swing touch detection
+                DrawSwingTouchIcons1H(); // Add swing touch icons
+                //BullishLiquidityGrab1H(); // Add bullish liquidity grab
+                //BearishLiquidityGrab1H(); // Add bearish liquidity grab
+                DetectSwingTouch5M();
+                DrawSwingTouchIcons5M();
+                BullishLiquidityGrab5Min();
+                BearishLiquidityGrab5Min();
             }
-
+            // Reset scale-in triggers and counts on new 1H swing levels
+            if (swingHighBarNumber1H > 0 && CurrentBars[2] > swingHighBarNumber1H)
+            {
+                bearishScaleInCount = 0;
+                bearishFVG5MTriggered = false;
+                bearishBreakout5MTriggered = false;
+            }
+            if (swingLowBarNumber1H > 0 && CurrentBars[2] > swingLowBarNumber1H)
+            {
+                bullishScaleInCount = 0;
+                bullishFVG5MTriggered = false;
+                bullishBreakout5MTriggered = false;
+            }
             if (triggerBullish5M)
             {
                 //BullishBreakout5Min();
@@ -507,6 +557,9 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentHigh5M = Math.Max(high1, high0);
                 int offset = (high1 > high0) ? 1 : 0;
                 swingHighBarNumber5M = CurrentBars[1] - offset;
+                swingHighTouched5M = false;
+                swingHighTouchBarNumber5M = -1;
+                bearishBreakout1MTriggered = false;  // Reset for bearish on high touch
                 Print($"5M Swing High detected at 5M bar {swingHighBarNumber5M}, Price: {recentHigh5M}, Time: {Times[1][offset]}, 1M Bar: {CurrentBar}");
             }
             if (Closes[1][1] < Opens[1][1] && Closes[1][0] > Opens[1][0])
@@ -516,6 +569,9 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentLow5M = Math.Min(low1, low0);
                 int offset = (low1 < low0) ? 1 : 0;
                 swingLowBarNumber5M = CurrentBars[1] - offset;
+                swingLowTouched5M = false;
+                swingLowTouchBarNumber5M = -1;
+                bullishBreakout1MTriggered = false;  // Reset for bullish on low touch
                 Print($"5M Swing Low detected at 5M bar {swingLowBarNumber5M}, Price: {recentLow5M}, Time: {Times[1][offset]}, 1M Bar: {CurrentBar}");
             }
             if (recentHigh5M == 0)
@@ -566,6 +622,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentHigh1H = Math.Max(high1, high0);
                 int offset = (high1 > high0) ? 1 : 0;
                 swingHighBarNumber1H = CurrentBars[2] - offset;
+                swingHighTouched1H = false; // Reset only on new swing high
+                swingHighTouchBarNumber1H = -1;
                 Print($"1H Swing High detected at 1H bar {swingHighBarNumber1H}, Price: {recentHigh1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}");
             }
             if (Closes[2][1] < Opens[2][1] && Closes[2][0] > Opens[2][0])
@@ -575,6 +633,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentLow1H = Math.Min(low1, low0);
                 int offset = (low1 < low0) ? 1 : 0;
                 swingLowBarNumber1H = CurrentBars[2] - offset;
+                swingLowTouched1H = false; // Reset only on new swing low
+                swingLowTouchBarNumber1H = -1;
                 Print($"1H Swing Low detected at 1H bar {swingLowBarNumber1H}, Price: {recentLow1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}");
             }
             if (recentHigh1H == 0)
@@ -670,8 +730,90 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
             }
         }
+        private void DetectSwingTouch1H()
+        {
+            if (CurrentBars[2] < 1) return;
 
+            // Detect touch of 1H swing high
+            if (swingHighBarNumber1H > 0 && !swingHighTouched1H)
+            {
+                if (High[0] >= recentHigh1H && Close[1] < recentHigh1H)
+                {
+                    swingHighTouched1H = true;
+                    swingHighTouchBarNumber1H = CurrentBar;
+                    Print($"1H Swing High touched at bar {CurrentBar}, Price: {recentHigh1H}");
+                }
+            }
 
+            // Detect touch of 1H swing low
+            if (swingLowBarNumber1H > 0 && !swingLowTouched1H)
+            {
+                if (Low[0] <= recentLow1H && Close[1] > recentLow1H)
+                {
+                    swingLowTouched1H = true;
+                    swingLowTouchBarNumber1H = CurrentBar;
+                    Print($"1H Swing Low touched at bar {CurrentBar}, Price: {recentLow1H}");
+                }
+            }
+        }
+        private void DrawSwingTouchIcons1H()
+        {
+            // Remove previous icons
+            RemoveDrawObject(swingHighTouchIconTag + "latest");
+            RemoveDrawObject(swingLowTouchIconTag + "latest");
+
+            // Draw icon on latest candle if it touched or is above 1H swing high
+            if (swingHighBarNumber1H > 0 && High[0] >= recentHigh1H)
+            {
+                Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                Draw.ArrowDown(this, swingHighTouchIconTag + "latest", false, 0, High[0] + 2 * TickSize, goldBrush);
+                Print($"Drawing 1H Swing High touch icon at latest bar {CurrentBar}, Price: {High[0]}");
+            }
+            else if (swingHighTouched1H && swingHighBarNumber1H > 0 && High[0] < recentHigh1H)
+            {
+                int lastAboveBar = -1;
+                for (int i = 1; i <= CurrentBar - swingHighTouchBarNumber1H; i++)
+                {
+                    if (High[i] >= recentHigh1H)
+                    {
+                        lastAboveBar = CurrentBar - i;
+                        break;
+                    }
+                }
+                if (lastAboveBar >= 0)
+                {
+                    Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                    Draw.ArrowDown(this, swingHighTouchIconTag + "latest", false, CurrentBar - lastAboveBar, High[CurrentBar - lastAboveBar] + 2 * TickSize, goldBrush);
+                    Print($"Drawing 1H Swing High touch icon at bar {lastAboveBar}, Price: {High[CurrentBar - lastAboveBar]}");
+                }
+            }
+
+            // Draw icon on latest candle if it touched or is below 1H swing low
+            if (swingLowBarNumber1H > 0 && Low[0] <= recentLow1H)
+            {
+                Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                Draw.ArrowUp(this, swingLowTouchIconTag + "latest", false, 0, Low[0] - 2 * TickSize, goldBrush);
+                Print($"Drawing 1H Swing Low touch icon at latest bar {CurrentBar}, Price: {Low[0]}");
+            }
+            else if (swingLowTouched1H && swingLowBarNumber1H > 0 && Low[0] > recentLow1H)
+            {
+                int lastBelowBar = -1;
+                for (int i = 1; i <= CurrentBar - swingLowTouchBarNumber1H; i++)
+                {
+                    if (Low[i] <= recentLow1H)
+                    {
+                        lastBelowBar = CurrentBar - i;
+                        break;
+                    }
+                }
+                if (lastBelowBar >= 0)
+                {
+                    Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                    Draw.ArrowUp(this, swingLowTouchIconTag + "latest", false, CurrentBar - lastBelowBar, Low[CurrentBar - lastBelowBar] - 2 * TickSize, goldBrush);
+                    Print($"Drawing 1H Swing Low touch icon at bar {lastBelowBar}, Price: {Low[CurrentBar - lastBelowBar]}");
+                }
+            }
+        }
         private void DetectFVG1M()
         {
             if (CurrentBar < 3) return;
@@ -732,6 +874,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private void DetectFVG5M()
         {
             if (CurrentBars[1] < 3) return;
+            bool newFVG = false;
             if (Lows[1][0] > Highs[1][2])
             {
                 bool shouldUpdate = (fvgLowBarNumber5M == -1) ||
@@ -740,13 +883,16 @@ namespace NinjaTrader.NinjaScript.Strategies
                                    (Math.Abs(Highs[1][2] - recentFVGLow5M) > TickSize);
                 if (shouldUpdate)
                 {
+                    // Clear all previous FVG fill arrows when new FVG is formed
+                    RemoveDrawObject(fvgLowFillArrowTag5M);
+                    RemoveDrawObject(fvgHighFillArrowTag5M);
                     recentFVGLow5M = Highs[1][2];
                     recentFVGHigh5M = Lows[1][0];
-                    fvgLowBarNumber5M = CurrentBars[1] - 1;
+                    fvgLowBarNumber5M = CurrentBars[1]; // Set to current 5M bar
                     fvgLowFillBarNumber5M = -1;
                     fvgHighBarNumber5M = -1;
                     fvgHighFillBarNumber5M = -1;
-                    RemoveDrawObject(fvgHighFillArrowTag5M);
+                    newFVG = true;
                     Print($"Bullish FVG5M detected at bar {fvgLowBarNumber5M}, Gap: {recentFVGLow5M} to {recentFVGHigh5M}");
                 }
             }
@@ -758,18 +904,56 @@ namespace NinjaTrader.NinjaScript.Strategies
                                    (Math.Abs(Lows[1][2] - recentFVGHigh5M) > TickSize);
                 if (shouldUpdate)
                 {
+                    // Clear all previous FVG fill arrows when new FVG is formed
+                    RemoveDrawObject(fvgLowFillArrowTag5M);
+                    RemoveDrawObject(fvgHighFillArrowTag5M);
                     recentFVGHigh5M = Lows[1][2];
                     recentFVGLow5M = Highs[1][0];
-                    fvgHighBarNumber5M = CurrentBars[1] - 1;
+                    fvgHighBarNumber5M = CurrentBars[1]; // Set to current 5M bar
                     fvgHighFillBarNumber5M = -1;
                     fvgLowBarNumber5M = -1;
                     fvgLowFillBarNumber5M = -1;
-                    RemoveDrawObject(fvgLowFillArrowTag5M);
+                    newFVG = true;
                     Print($"Bearish FVG5M detected at bar {fvgHighBarNumber5M}, Gap: {recentFVGLow5M} to {recentFVGHigh5M}");
                 }
             }
+            if (!newFVG && fvgLowBarNumber5M == -1 && fvgHighBarNumber5M == -1)
+            {
+                // Clear arrows if no valid FVG exists
+                RemoveDrawObject(fvgLowFillArrowTag5M);
+                RemoveDrawObject(fvgHighFillArrowTag5M);
+            }
         }
 
+        private void DetectFVG5MFill()
+        {
+            if (fvgLowBarNumber5M > 0 && recentFVGLow5M < recentFVGHigh5M && fvgLowFillBarNumber5M == -1)
+            {
+                // Ensure fill happens after the FVG-defining candles
+                if (CurrentBars[1] > fvgLowBarNumber5M && Low[0] <= recentFVGHigh5M)
+                {
+                    // Remove any existing arrow before drawing new one
+                    RemoveDrawObject(fvgLowFillArrowTag5M);
+                    fvgLowFillBarNumber5M = CurrentBar;
+                    Print($"Bullish FVG5M filled at bar {CurrentBar}, Low: {Low[0]}, Gap High: {recentFVGHigh5M}");
+                    Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                    Draw.ArrowUp(this, fvgLowFillArrowTag5M, false, 0, Low[0] - 2 * TickSize, goldBrush);
+                }
+            }
+            if (fvgHighBarNumber5M > 0 && recentFVGLow5M < recentFVGHigh5M && fvgHighFillBarNumber5M == -1)
+            {
+                // Ensure fill happens after the FVG-defining candles
+                if (CurrentBars[1] > fvgHighBarNumber5M && High[0] >= recentFVGLow5M)
+                {
+                    // Remove any existing arrow before drawing new one
+                    RemoveDrawObject(fvgHighFillArrowTag5M);
+                    fvgHighFillBarNumber5M = CurrentBar;
+                    Print($"Bearish FVG5M filled at bar {CurrentBar}, High: {High[0]}, Gap Low: {recentFVGLow5M}");
+                    Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                    Draw.ArrowDown(this, fvgHighFillArrowTag5M, false, 0, High[0] + 2 * TickSize, goldBrush);
+                }
+            }
+        }
         private void DetectFVG1H()
         {
             if (CurrentBars[2] < 3) return;
@@ -811,26 +995,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
-        private void DetectFVG5MFill()
-        {
-            if (fvgLowBarNumber5M > 0 && recentFVGLow5M < recentFVGHigh5M && fvgLowFillBarNumber5M == -1)
-            {
-                if (Low[0] <= recentFVGHigh5M)
-                {
-                    fvgLowFillBarNumber5M = CurrentBar;
-                    Print($"Bullish FVG5M filled at bar {CurrentBar}, Low: {Low[0]}, Gap High: {recentFVGHigh5M}");
-                }
-            }
-            if (fvgHighBarNumber5M > 0 && recentFVGLow5M < recentFVGHigh5M && fvgHighFillBarNumber5M == -1)
-            {
-                if (High[0] >= recentFVGLow5M)
-                {
-                    fvgHighFillBarNumber5M = CurrentBar;
-                    Print($"Bearish FVG5M filled at bar {CurrentBar}, High: {High[0]}, Gap Low: {recentFVGLow5M}");
-                }
-            }
-        }
-
+ 
         private void DetectFVG1HFill()
         {
             if (fvgLowBarNumber1H > 0 && recentFVGLow1H < recentFVGHigh1H && fvgLowFillBarNumber1H == -1)
@@ -1139,123 +1304,11 @@ namespace NinjaTrader.NinjaScript.Strategies
             currentTradeSetup = "1M Bearish Breakout";
             Print($"Entered short (Bearish Breakout) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
         }
-        private void BullishBreakout5Min()
-        {
-            if (State == State.Historical)
-                return;
-
-            if (Position.MarketPosition == MarketPosition.Short) return;
-            if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
-
-            string reason;
-            if (!TradingIsAllowed(out reason))
-            {
-                Print($"Cannot enter long (5M Bullish Breakout): {reason}");
-                return;
-            }
-
-            double entryApprox = Close[0];
-            double riskPoints;
-            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
-            {
-                riskPoints = entryApprox - sharedLongStopLoss;
-            }
-            else if (FixedStopLossTicks > 0)
-            {
-                riskPoints = FixedStopLossTicks * TickSize;
-                intendedLongStop = entryApprox - riskPoints;
-            }
-            else
-            {
-                intendedLongStop = recentLow5M;
-                riskPoints = entryApprox - intendedLongStop;
-            }
-
-            int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
-            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
-            double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
-            double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
-            int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
-            if (adjustedQuantity < 1)
-            {
-                Print($"Cannot enter long (5M Bullish Breakout): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
-                return;
-            }
-            double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
-            double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
-            if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
-            {
-                Print($"Cannot enter long (5M Bullish Breakout): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
-                return;
-            }
-            string uniqueId = Guid.NewGuid().ToString("N");
-            EnterLong(adjustedQuantity, $"LongEntry5M_{uniqueId}");
-            tradeCountToday++;
-            currentTradeSetup = "5M Bullish Breakout";
-            Print($"Entered long (5M Bullish Breakout) at {Close[0]}, Stop: {intendedLongStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
-            triggerBullish5M = false; // Moved here
-        }
-        private void BearishBreakout5Min()
-        {
-            if (State == State.Historical)
-                return;
-
-            if (Position.MarketPosition == MarketPosition.Long) return;
-            if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
-
-            string reason;
-            if (!TradingIsAllowed(out reason))
-            {
-                Print($"Cannot enter short (5M Bearish Breakout): {reason}");
-                return;
-            }
-
-            double entryApprox = Close[0];
-            double riskPoints;
-            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
-            {
-                riskPoints = sharedShortStopLoss - entryApprox;
-            }
-            else if (FixedStopLossTicks > 0)
-            {
-                riskPoints = FixedStopLossTicks * TickSize;
-                intendedShortStop = entryApprox + riskPoints;
-            }
-            else
-            {
-                intendedShortStop = recentHigh5M;
-                riskPoints = intendedShortStop - entryApprox;
-            }
-
-            int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
-            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
-            double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
-            double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
-            int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
-            if (adjustedQuantity < 1)
-            {
-                Print($"Cannot enter short (5M Bearish Breakout): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
-                return;
-            }
-            double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
-            double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
-            if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
-            {
-                Print($"Cannot enter short (5M Bearish Breakout): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
-                return;
-            }
-            string uniqueId = Guid.NewGuid().ToString("N");
-            EnterShort(adjustedQuantity, $"ShortEntry5M_{uniqueId}");
-            tradeCountToday++;
-            currentTradeSetup = "5M Bearish Breakout";
-            Print($"Entered short (5M Bearish Breakout) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
-            triggerBearish5M = false; // Moved here
-        }
         private void BullishFVG5Min()
         {
             if (State == State.Historical) return;
-            if (BarsArray[1] == null || CurrentBars[1] < 2) return; // Ensure 5M data is available
-            if (fvgLowFillBarNumber5M > 0)
+            if (BarsArray[1] == null || CurrentBars[1] < 2) return;
+            if (fvgLowFillBarNumber5M > 0 && !bullishFVG5MTriggered)
             {
                 if (Position.MarketPosition == MarketPosition.Short) return;
                 if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
@@ -1306,19 +1359,20 @@ namespace NinjaTrader.NinjaScript.Strategies
                         string uniqueId = Guid.NewGuid().ToString("N");
                         EnterLong(adjustedQuantity, $"BullishFVG5Min_{uniqueId}");
                         tradeCountToday++;
+                        bullishScaleInCount++;
+                        bullishFVG5MTriggered = true;
                         currentTradeSetup = "5M Bullish FVG";
-                        Print($"Entered long (5M Bullish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
+                        Print($"Entered long (5M Bullish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}, BullishScaleInCount: {bullishScaleInCount}");
                     }
                 }
             }
         }
 
-        // Update BearishFVG5Min to handle 1M chart case
         private void BearishFVG5Min()
         {
             if (State == State.Historical) return;
-            if (BarsArray[1] == null || CurrentBars[1] < 2) return; // Ensure 5M data is available
-            if (fvgHighFillBarNumber5M > 0)
+            if (BarsArray[1] == null || CurrentBars[1] < 2) return;
+            if (fvgHighFillBarNumber5M > 0 && !bearishFVG5MTriggered)
             {
                 if (Position.MarketPosition == MarketPosition.Long) return;
                 if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
@@ -1369,12 +1423,131 @@ namespace NinjaTrader.NinjaScript.Strategies
                         string uniqueId = Guid.NewGuid().ToString("N");
                         EnterShort(adjustedQuantity, $"BearishFVG5Min_{uniqueId}");
                         tradeCountToday++;
+                        bearishScaleInCount++;
+                        bearishFVG5MTriggered = true;
                         currentTradeSetup = "5M Bearish FVG";
-                        Print($"Entered short (5M Bearish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
+                        Print($"Entered short (5M Bearish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}, BearishScaleInCount: {bearishScaleInCount}");
                     }
                 }
             }
         }
+
+        private void BullishBreakout5Min()
+        {
+            if (State == State.Historical) return;
+            if (!triggerBullish5M || bullishBreakout5MTriggered) return;
+            if (Position.MarketPosition == MarketPosition.Short) return;
+            if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
+
+            string reason;
+            if (!TradingIsAllowed(out reason))
+            {
+                Print($"Cannot enter long (5M Bullish Breakout): {reason}");
+                return;
+            }
+
+            double entryApprox = Close[0];
+            double riskPoints;
+            if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
+            {
+                riskPoints = entryApprox - sharedLongStopLoss;
+            }
+            else if (FixedStopLossTicks > 0)
+            {
+                riskPoints = FixedStopLossTicks * TickSize;
+                intendedLongStop = entryApprox - riskPoints;
+            }
+            else
+            {
+                intendedLongStop = recentLow5M;
+                riskPoints = entryApprox - intendedLongStop;
+            }
+
+            int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+            double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+            int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+            if (adjustedQuantity < 1)
+            {
+                Print($"Cannot enter long (5M Bullish Breakout): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                return;
+            }
+            double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+            double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+            if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+            {
+                Print($"Cannot enter long (5M Bullish Breakout): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                return;
+            }
+            string uniqueId = Guid.NewGuid().ToString("N");
+            EnterLong(adjustedQuantity, $"LongEntry5M_{uniqueId}");
+            tradeCountToday++;
+            bullishScaleInCount++;
+            bullishBreakout5MTriggered = true;
+            currentTradeSetup = "5M Bullish Breakout";
+            Print($"Entered long (5M Bullish Breakout) at {Close[0]}, Stop: {intendedLongStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}, BullishScaleInCount: {bullishScaleInCount}");
+            triggerBullish5M = false;
+        }
+
+        private void BearishBreakout5Min()
+        {
+            if (State == State.Historical) return;
+            if (!triggerBearish5M || bearishBreakout5MTriggered) return;
+            if (Position.MarketPosition == MarketPosition.Long) return;
+            if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
+
+            string reason;
+            if (!TradingIsAllowed(out reason))
+            {
+                Print($"Cannot enter short (5M Bearish Breakout): {reason}");
+                return;
+            }
+
+            double entryApprox = Close[0];
+            double riskPoints;
+            if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
+            {
+                riskPoints = sharedShortStopLoss - entryApprox;
+            }
+            else if (FixedStopLossTicks > 0)
+            {
+                riskPoints = FixedStopLossTicks * TickSize;
+                intendedShortStop = entryApprox + riskPoints;
+            }
+            else
+            {
+                intendedShortStop = recentHigh5M;
+                riskPoints = intendedShortStop - entryApprox;
+            }
+
+            int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+            double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+            int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+            if (adjustedQuantity < 1)
+            {
+                Print($"Cannot enter short (5M Bearish Breakout): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                return;
+            }
+            double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+            double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+            if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+            {
+                Print($"Cannot enter short (5M Bearish Breakout): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                return;
+            }
+            string uniqueId = Guid.NewGuid().ToString("N");
+            EnterShort(adjustedQuantity, $"ShortEntry5M_{uniqueId}");
+            tradeCountToday++;
+            bearishScaleInCount++;
+            bearishBreakout5MTriggered = true;
+            currentTradeSetup = "5M Bearish Breakout";
+            Print($"Entered short (5M Bearish Breakout) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}, BearishScaleInCount: {bearishScaleInCount}");
+            triggerBearish5M = false;
+        }
+
         private void BullishFVG1Min()
         {
             if (State == State.Historical)
@@ -1499,6 +1672,258 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
             }
         }
+        private void BullishLiquidityGrab1H()
+        {
+            if (State == State.Historical) return;
+            if (swingLowTouched1H && swingLowTouchBarNumber1H > 0 && bullishScaleInCount < 2)
+            {
+                // Prevent bullish trades if price is above 1H swing high
+                if (Low[0] > recentHigh1H)
+                {
+                    Print($"Bullish trade blocked: Price {Low[0]} is above 1H Swing High {recentHigh1H}");
+                    return;
+                }
+                if (!bullishFVG5MTriggered)
+                {
+                    BullishFVG5Min();
+                }
+                if (!bullishBreakout5MTriggered)
+                {
+                    //BullishBreakout5Min();
+                }
+            }
+        }
+
+        private void BearishLiquidityGrab1H()
+        {
+            if (State == State.Historical) return;
+            if (swingHighTouched1H && swingHighTouchBarNumber1H > 0 && bearishScaleInCount < 2)
+            {
+                // Prevent bearish trades if price is below 1H swing low
+                if (High[0] < recentLow1H)
+                {
+                    Print($"Bearish trade blocked: Price {High[0]} is below 1H Swing Low {recentLow1H}");
+                    return;
+                }
+                if (!bearishFVG5MTriggered)
+                {
+                    BearishFVG5Min();
+                }
+                if (!bearishBreakout5MTriggered)
+                {
+                    //BearishBreakout5Min();
+                }
+            }
+        }
+        private void DetectSwingTouch5M()
+        {
+            if (CurrentBars[1] < 1) return;
+
+            // Detect touch of 5M swing high
+            if (swingHighBarNumber5M > 0 && !swingHighTouched5M)
+            {
+                if (High[0] >= recentHigh5M && Close[1] < recentHigh5M)
+                {
+                    swingHighTouched5M = true;
+                    swingHighTouchBarNumber5M = CurrentBar;
+                    Print($"5M Swing High touched at bar {CurrentBar}, Price: {recentHigh5M}");
+                }
+            }
+
+            // Detect touch of 5M swing low
+            if (swingLowBarNumber5M > 0 && !swingLowTouched5M)
+            {
+                if (Low[0] <= recentLow5M && Close[1] > recentLow5M)
+                {
+                    swingLowTouched5M = true;
+                    swingLowTouchBarNumber5M = CurrentBar;
+                    Print($"5M Swing Low touched at bar {CurrentBar}, Price: {recentLow5M}");
+                }
+            }
+        }
+
+        private void DrawSwingTouchIcons5M()
+        {
+            // Remove previous icons
+            RemoveDrawObject(swingHighTouchIconTag5M + "latest");
+            RemoveDrawObject(swingLowTouchIconTag5M + "latest");
+
+            // Draw icon on latest candle if it touched or is above 5M swing high
+            if (swingHighBarNumber5M > 0 && High[0] >= recentHigh5M)
+            {
+                Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                Draw.ArrowDown(this, swingHighTouchIconTag5M + "latest", false, 0, High[0] + 2 * TickSize, goldBrush);
+                Print($"Drawing 5M Swing High touch icon at latest bar {CurrentBar}, Price: {High[0]}");
+            }
+            else if (swingHighTouched5M && swingHighBarNumber5M > 0 && High[0] < recentHigh5M)
+            {
+                int lastAboveBar = -1;
+                for (int i = 1; i <= CurrentBar - swingHighTouchBarNumber5M; i++)
+                {
+                    if (High[i] >= recentHigh5M)
+                    {
+                        lastAboveBar = CurrentBar - i;
+                        break;
+                    }
+                }
+                if (lastAboveBar >= 0)
+                {
+                    Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                    Draw.ArrowDown(this, swingHighTouchIconTag5M + "latest", false, CurrentBar - lastAboveBar, High[CurrentBar - lastAboveBar] + 2 * TickSize, goldBrush);
+                    Print($"Drawing 5M Swing High touch icon at bar {lastAboveBar}, Price: {High[CurrentBar - lastAboveBar]}");
+                }
+            }
+
+            // Draw icon on latest candle if it touched or is below 5M swing low
+            if (swingLowBarNumber5M > 0 && Low[0] <= recentLow5M)
+            {
+                Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                Draw.ArrowUp(this, swingLowTouchIconTag5M + "latest", false, 0, Low[0] - 2 * TickSize, goldBrush);
+                Print($"Drawing 5M Swing Low touch icon at latest bar {CurrentBar}, Price: {Low[0]}");
+            }
+            else if (swingLowTouched5M && swingLowBarNumber5M > 0 && Low[0] > recentLow5M)
+            {
+                int lastBelowBar = -1;
+                for (int i = 1; i <= CurrentBar - swingLowTouchBarNumber5M; i++)
+                {
+                    if (Low[i] <= recentLow5M)
+                    {
+                        lastBelowBar = CurrentBar - i;
+                        break;
+                    }
+                }
+                if (lastBelowBar >= 0)
+                {
+                    Brush goldBrush = new SolidColorBrush(Color.FromArgb(255, 255, 215, 0));
+                    Draw.ArrowUp(this, swingLowTouchIconTag5M + "latest", false, CurrentBar - lastBelowBar, Low[CurrentBar - lastBelowBar] - 2 * TickSize, goldBrush);
+                    Print($"Drawing 5M Swing Low touch icon at bar {lastBelowBar}, Price: {Low[CurrentBar - lastBelowBar]}");
+                }
+            }
+        }
+
+        private void BullishLiquidityGrab5Min()
+        {
+            if (State == State.Historical) return;
+            if (swingLowTouched5M && swingLowTouchBarNumber5M > 0 && CurrentBar > swingLowTouchBarNumber5M && bullishScaleInCount < 2 && !bullishBreakout1MTriggered)
+            {
+                if (Position.MarketPosition == MarketPosition.Short) return;
+                if (Position.MarketPosition == MarketPosition.Long && openEntries.Count >= 2) return;
+
+                // Check for 1M bullish breakout (BOS up)
+                if (Close[0] > recentHigh && Close[1] <= recentHigh)
+                {
+                    string reason;
+                    if (!TradingIsAllowed(out reason))
+                    {
+                        Print($"Cannot enter long (5M Bullish Liquidity Grab): {reason}");
+                        return;
+                    }
+                    double entryApprox = Close[0];
+                    double riskPoints;
+                    if (Position.MarketPosition == MarketPosition.Long && sharedLongStopLoss > 0)
+                    {
+                        riskPoints = entryApprox - sharedLongStopLoss;
+                    }
+                    else if (FixedStopLossTicks > 0)
+                    {
+                        riskPoints = FixedStopLossTicks * TickSize;
+                        intendedLongStop = entryApprox - riskPoints;
+                    }
+                    else
+                    {
+                        intendedLongStop = recentLow;
+                        riskPoints = entryApprox - intendedLongStop;
+                    }
+                    int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+                    double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+                    double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+                    double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+                    int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+                    if (adjustedQuantity < 1)
+                    {
+                        Print($"Cannot enter long (5M Bullish Liquidity Grab): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                        return;
+                    }
+                    double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+                    double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+                    if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+                    {
+                        Print($"Cannot enter long (5M Bullish Liquidity Grab): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                        return;
+                    }
+                    string uniqueId = Guid.NewGuid().ToString("N");
+                    EnterLong(adjustedQuantity, $"BullishLiqGrab5M_{uniqueId}");
+                    tradeCountToday++;
+                    bullishScaleInCount++;
+                    bullishBreakout1MTriggered = true;
+                    currentTradeSetup = "5M Bullish Liquidity Grab";
+                    Print($"Entered long (5M Bullish Liquidity Grab) at {Close[0]}, Stop: {intendedLongStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}, BullishScaleInCount: {bullishScaleInCount}");
+                }
+            }
+        }
+
+        private void BearishLiquidityGrab5Min()
+        {
+            if (State == State.Historical) return;
+            if (swingHighTouched5M && swingHighTouchBarNumber5M > 0 && CurrentBar > swingHighTouchBarNumber5M && bearishScaleInCount < 2 && !bearishBreakout1MTriggered)
+            {
+                if (Position.MarketPosition == MarketPosition.Long) return;
+                if (Position.MarketPosition == MarketPosition.Short && openEntries.Count >= 2) return;
+
+                // Check for 1M bearish breakout (BOS down)
+                if (Close[0] < recentLow && Close[1] >= recentLow)
+                {
+                    string reason;
+                    if (!TradingIsAllowed(out reason))
+                    {
+                        Print($"Cannot enter short (5M Bearish Liquidity Grab): {reason}");
+                        return;
+                    }
+                    double entryApprox = Close[0];
+                    double riskPoints;
+                    if (Position.MarketPosition == MarketPosition.Short && sharedShortStopLoss > 0)
+                    {
+                        riskPoints = sharedShortStopLoss - entryApprox;
+                    }
+                    else if (FixedStopLossTicks > 0)
+                    {
+                        riskPoints = FixedStopLossTicks * TickSize;
+                        intendedShortStop = entryApprox + riskPoints;
+                    }
+                    else
+                    {
+                        intendedShortStop = recentHigh;
+                        riskPoints = intendedShortStop - entryApprox;
+                    }
+                    int tradeQuantity = Math.Min(consecutiveLosses + 1, 7);
+                    double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+                    double maxRiskPerContract = (MaxRiskPerTradePct / 100.0) * accountBalance;
+                    double riskCurrencyPerContract = riskPoints * Instrument.MasterInstrument.PointValue;
+                    int adjustedQuantity = Math.Min(tradeQuantity, (int)(maxRiskPerContract / riskCurrencyPerContract));
+                    if (adjustedQuantity < 1)
+                    {
+                        Print($"Cannot enter short (5M Bearish Liquidity Grab): Risk per contract {riskCurrencyPerContract:F2} exceeds max risk {maxRiskPerContract:F2}");
+                        return;
+                    }
+                    double totalRiskCurrency = riskCurrencyPerContract * adjustedQuantity;
+                    double totalRiskPct = (totalRiskCurrency / accountBalance) * 100;
+                    if (totalRiskPct > MaxRiskPerTradePct * tradeQuantity)
+                    {
+                        Print($"Cannot enter short (5M Bearish Liquidity Grab): Total risk {totalRiskPct:F2}% > {MaxRiskPerTradePct * tradeQuantity}%");
+                        return;
+                    }
+                    string uniqueId = Guid.NewGuid().ToString("N");
+                    EnterShort(adjustedQuantity, $"BearishLiqGrab5M_{uniqueId}");
+                    tradeCountToday++;
+                    bearishScaleInCount++;
+                    bearishBreakout1MTriggered = true;
+                    currentTradeSetup = "5M Bearish Liquidity Grab";
+                    Print($"Entered short (5M Bearish Liquidity Grab) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}, BearishScaleInCount: {bearishScaleInCount}");
+                }
+            }
+        }
+
+
 
         protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity,
             MarketPosition marketPosition, string orderId, DateTime time)
@@ -1533,6 +1958,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 ProcessBullishFVG5MExecution(execution);
             else if (execution.Order.Name.StartsWith("BearishFVG5Min"))
                 ProcessBearishFVG5MExecution(execution);
+            else if (execution.Order.Name.StartsWith("BullishLiqGrab5M"))
+                ProcessLongExecution(execution);
+            else if (execution.Order.Name.StartsWith("BearishLiqGrab5M"))
+                ProcessShortExecution(execution);
         }
 
         private void ProcessLongExecution(Execution execution)
@@ -1781,14 +2210,13 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void DrawSwingHigh1M(int barsAgo)
         {
-            Draw.Line(this, highLineTag, false, barsAgo, recentHigh, -100, recentHigh,
-                     Brushes.Pink, DashStyleHelper.Dot, 1);
+            Draw.Line(this, highLineTag, false, barsAgo, recentHigh, -100, recentHigh,Brushes.Pink, DashStyleHelper.Dot, 1);
+
         }
 
         private void DrawSwingLow1M(int barsAgo)
         {
-            Draw.Line(this, lowLineTag, false, barsAgo, recentLow, -100, recentLow,
-                     Brushes.Pink, DashStyleHelper.Dot, 1);
+            Draw.Line(this, lowLineTag, false, barsAgo, recentLow, -100, recentLow,Brushes.Pink, DashStyleHelper.Dot, 1);
         }
 
         private void DrawLevels5M()
