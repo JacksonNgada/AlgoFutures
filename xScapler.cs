@@ -133,7 +133,11 @@ namespace NinjaTrader.NinjaScript.Strategies
         private bool bearishFVG5MTriggered = false;
         private bool bullishBreakout5MTriggered = false;
         private bool bearishBreakout5MTriggered = false;
-
+        private bool tradeTakenAsiaLow = false;
+        private bool tradeTakenAsiaHigh = false;
+        private bool tradeTaken1HLow = false;
+        private bool tradeTaken1HHigh = false;
+        private string currentSwingContext = "";
         // User input properties
         [NinjaScriptProperty]
         [Display(Name = "Max Trades Per Day", Description = "Maximum number of trades allowed per day", Order = 1, GroupName = "Trading Parameters")]
@@ -318,6 +322,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 asiaLowTouched = false;
                 asiaHighTouchBarNumber = -1;
                 asiaLowTouchBarNumber = -1;
+                tradeTakenAsiaLow = false; // Reset for new day
+                tradeTakenAsiaHigh = false; // Reset for new day
+                tradeTaken1HLow = false; // Reset for new day
+                tradeTaken1HHigh = false; // Reset for new day
                 Print($"New trading day reset at {Time[0]}: lastDay={lastDay}, tradeCountToday={tradeCountToday}, all session stats cleared, Asia session reset");
             }
 
@@ -330,32 +338,42 @@ namespace NinjaTrader.NinjaScript.Strategies
             if (BarsInProgress == 0)
             {
                 DetectSwingPoints5M();
-                DetectFVG5M();
+                //DetectFVG5M();
                 DetectBreakOfStructure5M();
                 DetectSwingPoints1H();
-                DetectFVG1H();
+                //DetectFVG1H();
                 DetectSwingPoints1M();
                 DetectFVG1M();
-                DetectFVG5MFill();
-                DetectFVG1HFill();
+                //DetectFVG5MFill();
+                //DetectFVG1HFill();
                 DrawLevels1M();
                 DetectBreakOfStructure1M();
                 DrawLevels5M();
                 DrawFVG1M();
-                DrawFVG5M();
+                //DrawFVG5M();
                 DrawLevels1H();
                 DetectAsiaSessionLevels();
                 DrawAsiaSessionLevels();
-                DetectAsiaSessionTouch();
-                DrawAsiaTouchIcons();
-                BullishAsiaLiquidityGrab();
-                BearishAsiaLiquidityGrab();
+                if (IsLondonTradingAllowed())
+                {
+                    DetectAsiaSessionTouch();
+                    DrawAsiaTouchIcons();
+                }
+
                 DrawTradeSetupLabel();
                 DrawTradingStatus();
                 DetectSwingTouch1H();
                 DrawSwingTouchIcons1H();
+
+                BullishAsiaLiquidityGrab();
+                BearishAsiaLiquidityGrab();
+
                 BullishLiquidityGrab1H();
                 BearishLiquidityGrab1H();
+
+                BullishLiquidityGrab5Min();
+                BearishLiquidityGrab5Min();
+
                 DetectSwingTouch5M();
                 DrawSwingTouchIcons5M();
             }// Reset currentTradeSetup when position is flat
@@ -641,9 +659,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentHigh1H = Math.Max(high1, high0);
                 int offset = (high1 > high0) ? 1 : 0;
                 swingHighBarNumber1H = CurrentBars[2] - offset;
-                swingHighTouched1H = false; // Reset only on new swing high
+                swingHighTouched1H = false;
                 swingHighTouchBarNumber1H = -1;
-                Print($"1H Swing High detected at 1H bar {swingHighBarNumber1H}, Price: {recentHigh1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}");
+                tradeTaken1HHigh = false; // Reset to allow new trade
+                Print($"1H Swing High detected at 1H bar {swingHighBarNumber1H}, Price: {recentHigh1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}, tradeTaken1HHigh reset");
             }
             if (Closes[2][1] < Opens[2][1] && Closes[2][0] > Opens[2][0])
             {
@@ -652,9 +671,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 recentLow1H = Math.Min(low1, low0);
                 int offset = (low1 < low0) ? 1 : 0;
                 swingLowBarNumber1H = CurrentBars[2] - offset;
-                swingLowTouched1H = false; // Reset only on new swing low
+                swingLowTouched1H = false;
                 swingLowTouchBarNumber1H = -1;
-                Print($"1H Swing Low detected at 1H bar {swingLowBarNumber1H}, Price: {recentLow1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}");
+                tradeTaken1HLow = false; // Reset to allow new trade
+                Print($"1H Swing Low detected at 1H bar {swingLowBarNumber1H}, Price: {recentLow1H}, Time: {Times[2][offset]}, 1M Bar: {CurrentBar}, tradeTaken1HLow reset");
             }
             if (recentHigh1H == 0)
                 FindRecentSwingHigh1H();
@@ -702,17 +722,18 @@ namespace NinjaTrader.NinjaScript.Strategies
                 {
                     asiaHigh = High[0];
                     asiaHighBarNumber = CurrentBar;
-                    Print($"Asia High updated at {Time[0]}: {asiaHigh}, Bar: {asiaHighBarNumber}");
+                    tradeTakenAsiaHigh = false; // Reset to allow new trade
+                    Print($"Asia High updated at {Time[0]}: {asiaHigh}, Bar: {asiaHighBarNumber}, tradeTakenAsiaHigh reset");
                 }
                 if (Low[0] < asiaLow)
                 {
                     asiaLow = Low[0];
                     asiaLowBarNumber = CurrentBar;
-                    Print($"Asia Low updated at {Time[0]}: {asiaLow}, Bar: {asiaLowBarNumber}");
+                    tradeTakenAsiaLow = false; // Reset to allow new trade
+                    Print($"Asia Low updated at {Time[0]}: {asiaLow}, Bar: {asiaLowBarNumber}, tradeTakenAsiaLow reset");
                 }
             }
         }
-
         private void DrawAsiaSessionLevels()
         {
             RemoveDrawObject(asiaHighLineTag);
@@ -1340,7 +1361,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
             string uniqueId = Guid.NewGuid().ToString("N");
-            EnterLong(adjustedQuantity, $"LongEntry_{uniqueId}");
+            EnterLongHelper(adjustedQuantity, $"LongEntry_{uniqueId}");
             tradeCountToday++;
             currentTradeSetup = "1M Bullish Breakout";
             Print($"Entered long (Bullish Breakout) at {Close[0]}, Stop: {intendedLongStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
@@ -1394,7 +1415,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
             string uniqueId = Guid.NewGuid().ToString("N");
-            EnterShort(adjustedQuantity, $"ShortEntry_{uniqueId}");
+            EnterShortHelper(adjustedQuantity, $"ShortEntry_{uniqueId}");
             tradeCountToday++;
             currentTradeSetup = "1M Bearish Breakout";
             Print($"Entered short (Bearish Breakout) at {Close[0]}, Stop: {intendedShortStop}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
@@ -1452,7 +1473,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             return;
                         }
                         string uniqueId = Guid.NewGuid().ToString("N");
-                        EnterLong(adjustedQuantity, $"BullishFVG5Min_{uniqueId}");
+                        EnterLongHelper(adjustedQuantity, $"BullishFVG5Min_{uniqueId}");
                         tradeCountToday++;
                         bullishScaleInCount++;
                         bullishFVG5MTriggered = true;
@@ -1516,7 +1537,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             return;
                         }
                         string uniqueId = Guid.NewGuid().ToString("N");
-                        EnterShort(adjustedQuantity, $"BearishFVG5Min_{uniqueId}");
+                        EnterShortHelper(adjustedQuantity, $"BearishFVG5Min_{uniqueId}");
                         tradeCountToday++;
                         bearishScaleInCount++;
                         bearishFVG5MTriggered = true;
@@ -1576,7 +1597,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
             string uniqueId = Guid.NewGuid().ToString("N");
-            EnterLong(adjustedQuantity, $"LongEntry5M_{uniqueId}");
+            EnterLongHelper(adjustedQuantity, $"LongEntry5M_{uniqueId}");
             tradeCountToday++;
             bullishScaleInCount++;
             bullishBreakout5MTriggered = true;
@@ -1634,7 +1655,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
             string uniqueId = Guid.NewGuid().ToString("N");
-            EnterShort(adjustedQuantity, $"ShortEntry5M_{uniqueId}");
+            EnterShortHelper(adjustedQuantity, $"ShortEntry5M_{uniqueId}");
             tradeCountToday++;
             bearishScaleInCount++;
             bearishBreakout5MTriggered = true;
@@ -1697,7 +1718,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             return;
                         }
                         string uniqueId = Guid.NewGuid().ToString("N");
-                        EnterLong(adjustedQuantity, $"BullishFVG1Min_{uniqueId}");
+                        EnterLongHelper(adjustedQuantity, $"BullishFVG1Min_{uniqueId}");
                         tradeCountToday++;
                         currentTradeSetup = "1M Bullish FVG";
                         Print($"Entered long (Bullish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
@@ -1759,7 +1780,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             return;
                         }
                         string uniqueId = Guid.NewGuid().ToString("N");
-                        EnterShort(adjustedQuantity, $"BearishFVG1Min_{uniqueId}");
+                        EnterShortHelper(adjustedQuantity, $"BearishFVG1Min_{uniqueId}");
                         tradeCountToday++;
                         currentTradeSetup = "1M Bearish FVG";
                         Print($"Entered short (Bearish FVG) at {Close[0]}, TradeCountToday: {tradeCountToday}, Quantity: {adjustedQuantity}, TotalRisk: {totalRiskCurrency:F2}");
@@ -1773,33 +1794,39 @@ namespace NinjaTrader.NinjaScript.Strategies
             if (State == State.Historical || !IsLondonTradingAllowed() || Low[0] > asiaHigh) return;
             if (asiaLowTouched && asiaLowTouchBarNumber > 0 && bullishScaleInCount < 2)
             {
-                if (!bullishFVG5MTriggered) BullishFVG5Min();
-                if (!bullishBreakout5MTriggered) BullishBreakout5Min();
-                if (Position.MarketPosition == MarketPosition.Flat) // Only proceed if not already in a trade
+                currentSwingContext = "AsiaLow";
+                //if (!bullishFVG5MTriggered) BullishFVG5Min();
+                //if (!bullishBreakout5MTriggered) BullishBreakout5Min();
+                if (Position.MarketPosition == MarketPosition.Flat)
                 {
-                    BullishLiquidityGrab5Min();
+                    //BullishLiquidityGrab5Min();
+                    //BullishBreakout1Min();
+                    BullishFVG1Min();
                     currentTradeSetup = "Bullish Asia Liquidity Grab";
                     Print($"Bullish Asia Liquidity Grab entered at {Time[0]}, Price: {Close[0]}");
                 }
+                currentSwingContext = "";
             }
         }
-
         private void BearishAsiaLiquidityGrab()
         {
             if (State == State.Historical || !IsLondonTradingAllowed() || High[0] < asiaLow) return;
             if (asiaHighTouched && asiaHighTouchBarNumber > 0 && bearishScaleInCount < 2)
             {
-                if (!bearishFVG5MTriggered) BearishFVG5Min();
-                if (!bearishBreakout5MTriggered) BearishBreakout5Min();
-                if (Position.MarketPosition == MarketPosition.Flat) // Only proceed if not already in a trade
+                currentSwingContext = "AsiaHigh";
+                //if (!bearishFVG5MTriggered) BearishFVG5Min();
+                //if (!bearishBreakout5MTriggered) BearishBreakout5Min();
+                if (Position.MarketPosition == MarketPosition.Flat)
                 {
-                    BearishLiquidityGrab5Min();
+                    //BearishLiquidityGrab5Min();
+                    //BearishBreakout1Min();
+                    BearishFVG1Min();
                     currentTradeSetup = "Bearish Asia Liquidity Grab";
                     Print($"Bearish Asia Liquidity Grab entered at {Time[0]}, Price: {Close[0]}");
                 }
+                currentSwingContext = "";
             }
         }
-
         private void BullishLiquidityGrab1H()
         {
             if (State == State.Historical) return;
@@ -1810,18 +1837,15 @@ namespace NinjaTrader.NinjaScript.Strategies
                     Print($"Bullish trade blocked: Price {Low[0]} is above 1H Swing High {recentHigh1H}");
                     return;
                 }
-                if (!bullishFVG5MTriggered)
-                {
-                    BullishFVG5Min();
-                }
-                if (!bullishBreakout5MTriggered)
-                {
-                    BullishBreakout5Min();
-                }
-                BullishLiquidityGrab5Min();
+                currentSwingContext = "1HLow";
+                //if (!bullishFVG5MTriggered) BullishFVG5Min();
+                //if (!bullishBreakout5MTriggered) BullishBreakout5Min();
+                //BullishLiquidityGrab5Min();
+                //BullishBreakout1Min();
+                BullishFVG1Min();
+                currentSwingContext = "";
             }
         }
-
         private void BearishLiquidityGrab1H()
         {
             if (State == State.Historical) return;
@@ -1832,18 +1856,15 @@ namespace NinjaTrader.NinjaScript.Strategies
                     Print($"Bearish trade blocked: Price {High[0]} is below 1H Swing Low {recentLow1H}");
                     return;
                 }
-                if (!bearishFVG5MTriggered)
-                {
-                    BearishFVG5Min();
-                }
-                if (!bearishBreakout5MTriggered)
-                {
-                    BearishBreakout5Min();
-                }
-                BearishLiquidityGrab5Min();
+                currentSwingContext = "1HHigh";
+                //if (!bearishFVG5MTriggered) BearishFVG5Min();
+                //if (!bearishBreakout5MTriggered) BearishBreakout5Min();
+                //BearishLiquidityGrab5Min();
+                //BearishBreakout1Min();
+                BearishFVG1Min();
+                currentSwingContext = "";
             }
         }
-
         private void DetectSwingTouch5M()
         {
             if (CurrentBars[1] < 1) return;
@@ -1930,7 +1951,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
-        private void BullishLiquidityGrab5Min()
+        private void BullishLiquidityGrab5Minold()
         {
             if (State == State.Historical) return;
             if (swingLowTouched5M && swingLowTouchBarNumber5M > 0 && CurrentBar > swingLowTouchBarNumber5M && bullishScaleInCount < 2 && !bullishBreakout1MTriggered)
@@ -1981,7 +2002,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                         return;
                     }
                     string uniqueId = Guid.NewGuid().ToString("N");
-                    EnterLong(adjustedQuantity, $"BullishLiqGrab5M_{uniqueId}");
+                    EnterLongHelper(adjustedQuantity, $"BullishLiqGrab5M_{uniqueId}");
                     tradeCountToday++;
                     bullishScaleInCount++;
                     bullishBreakout1MTriggered = true;
@@ -1991,7 +2012,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
-        private void BearishLiquidityGrab5Min()
+        private void BearishLiquidityGrab5Minold()
         {
             if (State == State.Historical) return;
             if (swingHighTouched5M && swingHighTouchBarNumber5M > 0 && CurrentBar > swingHighTouchBarNumber5M && bearishScaleInCount < 2 && !bearishBreakout1MTriggered)
@@ -2042,7 +2063,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                         return;
                     }
                     string uniqueId = Guid.NewGuid().ToString("N");
-                    EnterShort(adjustedQuantity, $"BearishLiqGrab5M_{uniqueId}");
+                    EnterShortHelper(adjustedQuantity, $"BearishLiqGrab5M_{uniqueId}");
                     tradeCountToday++;
                     bearishScaleInCount++;
                     bearishBreakout1MTriggered = true;
@@ -2053,7 +2074,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         }
 
 
-        private void BullishLiquidityGrab5Minnew()
+        private void BullishLiquidityGrab5Min()
         {
             if (State == State.Historical) return;
             if (swingLowTouched5M && swingLowTouchBarNumber5M > 0 && CurrentBar > swingLowTouchBarNumber5M && bullishScaleInCount < 2 && !bullishBreakout1MTriggered)
@@ -2070,7 +2091,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 if (!bullishBreakout1MTriggered)
                 {
-                    BullishBreakout1Min();
+                    //BullishBreakout1Min();
                 }
                 BullishFVG1Min();
 
@@ -2078,7 +2099,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
-        private void BearishLiquidityGrab5MinNew()
+        private void BearishLiquidityGrab5Min()
         {
             if (State == State.Historical) return;
             if (swingHighTouched5M && swingHighTouchBarNumber5M > 0 && CurrentBar > swingHighTouchBarNumber5M && bearishScaleInCount < 2 && !bearishBreakout1MTriggered)
@@ -2095,7 +2116,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 if (!bearishBreakout1MTriggered)
                 {
-                    BearishBreakout1Min();
+                    //BearishBreakout1Min();
                 }
                 BearishFVG1Min();
 
@@ -2481,7 +2502,58 @@ namespace NinjaTrader.NinjaScript.Strategies
             pnL += Position.GetUnrealizedProfitLoss(PerformanceUnit.Currency);
             return pnL;
         }
+        private void EnterLongHelper(int quantity, string signalName)
+        {
+            if (string.IsNullOrEmpty(currentSwingContext))
+            {
+                EnterLong(quantity, signalName);
+                return;
+            }
 
+            if (GetTradeTaken(currentSwingContext))
+            {
+                Print($"Trade not taken for {currentSwingContext}: already taken one");
+                return;
+            }
+
+            EnterLong(quantity, signalName);
+            SetTradeTaken(currentSwingContext, true);
+        }
+
+        private void EnterShortHelper(int quantity, string signalName)
+        {
+            if (string.IsNullOrEmpty(currentSwingContext))
+            {
+                EnterShort(quantity, signalName);
+                return;
+            }
+
+            if (GetTradeTaken(currentSwingContext))
+            {
+                Print($"Trade not taken for {currentSwingContext}: already taken one");
+                return;
+            }
+
+            EnterShort(quantity, signalName);
+            SetTradeTaken(currentSwingContext, true);
+        }
+
+        private bool GetTradeTaken(string context)
+        {
+            if (context == "AsiaLow") return tradeTakenAsiaLow;
+            if (context == "AsiaHigh") return tradeTakenAsiaHigh;
+            if (context == "1HLow") return tradeTaken1HLow;
+            if (context == "1HHigh") return tradeTaken1HHigh;
+            return false;
+        }
+
+        private void SetTradeTaken(string context, bool value)
+        {
+            if (context == "AsiaLow") tradeTakenAsiaLow = value;
+            if (context == "AsiaHigh") tradeTakenAsiaHigh = value;
+            if (context == "1HLow") tradeTaken1HLow = value;
+            if (context == "1HHigh") tradeTaken1HHigh = value;
+        }
         private void DrawTradingStatus()
         {
             string reason;
