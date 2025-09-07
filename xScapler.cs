@@ -418,47 +418,6 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void ProcessTradesAndPosition()
         {
-            TimeSpan morningStart = TimeSpan.Parse(MorningSessionStart);
-            TimeSpan morningEnd = TimeSpan.Parse(MorningSessionEnd);
-            TimeSpan afternoonStart = TimeSpan.Parse(AfternoonSessionStart);
-            TimeSpan afternoonEnd = TimeSpan.Parse(AfternoonSessionEnd);
-
-            if (SystemPerformance.AllTrades.Count > lastTradeCount)
-            {
-                for (int i = lastTradeCount; i < SystemPerformance.AllTrades.Count; i++)
-                {
-                    Trade trade = SystemPerformance.AllTrades[i];
-                    double pnL = trade.ProfitCurrency;
-                    DateTime exitTime = trade.Exit.Time;
-                    TimeSpan tradeTime = exitTime.TimeOfDay;
-                    bool isMorningSession = tradeTime >= morningStart && tradeTime <= morningEnd;
-                    bool isAfternoonSession = tradeTime >= afternoonStart && tradeTime <= afternoonEnd;
-
-                    if (pnL > 0)
-                    {
-                        consecutiveLosses = 0;
-                        if (isMorningSession)
-                            morningSessionWins++;
-                        else if (isAfternoonSession)
-                            afternoonSessionWins++;
-                        Print($"Trade closed with profit: {pnL:F2}, MorningWins={morningSessionWins}, AfternoonWins={afternoonSessionWins}, ConsecutiveLosses={consecutiveLosses}");
-                    }
-                    else if (pnL < 0)
-                    {
-                        consecutiveLosses++;
-                        if (consecutiveLosses >= 7)
-                            consecutiveLosses = 0;
-                        if (isMorningSession)
-                            morningSessionLosses++;
-                        else if (isAfternoonSession)
-                            afternoonSessionLosses++;
-                        Print($"Trade closed with loss: {pnL:F2}, MorningLosses={morningSessionLosses}, AfternoonLosses={afternoonSessionLosses}, ConsecutiveLosses={consecutiveLosses}");
-                    }
-                    Print($"Processed trade {i}: PnL={pnL:F2}, ConsecutiveLosses={consecutiveLosses}");
-                }
-                lastTradeCount = SystemPerformance.AllTrades.Count;
-            }
-
             if (Position.MarketPosition == MarketPosition.Flat)
             {
                 currentTradeSetup = "";
@@ -468,7 +427,6 @@ namespace NinjaTrader.NinjaScript.Strategies
                 sharedShortTakeProfit = 0;
             }
         }
-
         private bool IsLondonTradingAllowed()
         {
             DateTime sastTime = Time[0].AddHours(2); // Adjust if Time[0] not in UTC
@@ -2123,8 +2081,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 currentTradeSetup = "Post 5M Liquidity Bearish Entry";
             }
         }
-        protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity,
-            MarketPosition marketPosition, string orderId, DateTime time)
+        protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity, MarketPosition marketPosition, string orderId, DateTime time)
         {
             if (execution.Order?.OrderState != OrderState.Filled) return;
 
@@ -2160,6 +2117,36 @@ namespace NinjaTrader.NinjaScript.Strategies
                 ProcessLongExecution(execution);
             else if (execution.Order.Name.StartsWith("BearishLiqGrab5M"))
                 ProcessShortExecution(execution);
+
+            // Detect stop-loss closure and trigger recovery trade
+            if (execution.Order.OrderAction == OrderAction.Sell && execution.Order.FromEntrySignal != null &&
+                openEntries.Count == 0 && Position.MarketPosition == MarketPosition.Flat)
+            {
+                double pnL = SystemPerformance.AllTrades.Count > 0 ? SystemPerformance.AllTrades[SystemPerformance.AllTrades.Count - 1].ProfitCurrency : 0;
+                if (pnL < 0)
+                {
+                    consecutiveLosses++;
+                    if (consecutiveLosses >= 7) consecutiveLosses = 0;
+                    TimeSpan tradeTime = time.TimeOfDay; // Define tradeTime here
+                    bool isMorningSession = tradeTime >= TimeSpan.Parse(MorningSessionStart) && tradeTime <= TimeSpan.Parse(MorningSessionEnd);
+                    bool isAfternoonSession = tradeTime >= TimeSpan.Parse(AfternoonSessionStart) && tradeTime <= TimeSpan.Parse(AfternoonSessionEnd);
+                    if (isMorningSession) morningSessionLosses++;
+                    else if (isAfternoonSession) afternoonSessionLosses++;
+                    Print($"Trade closed with loss: {pnL:F2}, ConsecutiveLosses={consecutiveLosses}");
+                    // Use marketPosition from execution parameter
+                    ExecuteRecoveryTradeAfterLoss(execution.Price, marketPosition == MarketPosition.Long ? MarketPosition.Short : MarketPosition.Long);
+                }
+                else
+                {
+                    consecutiveLosses = 0;
+                    TimeSpan tradeTime = time.TimeOfDay; // Define tradeTime here
+                    bool isMorningSession = tradeTime >= TimeSpan.Parse(MorningSessionStart) && tradeTime <= TimeSpan.Parse(MorningSessionEnd);
+                    bool isAfternoonSession = tradeTime >= TimeSpan.Parse(AfternoonSessionStart) && tradeTime <= TimeSpan.Parse(AfternoonSessionEnd);
+                    if (isMorningSession) morningSessionWins++;
+                    else if (isAfternoonSession) afternoonSessionWins++;
+                    Print($"Trade closed with profit: {pnL:F2}, ConsecutiveLosses={consecutiveLosses}");
+                }
+            }
         }
 
         private void ProcessLongExecution(Execution execution)
@@ -2537,6 +2524,74 @@ namespace NinjaTrader.NinjaScript.Strategies
             EnterShort(quantity, signalName);
             SetTradeTaken(currentSwingContext, true);
         }
+
+        private void ExecuteRecoveryTradeAfterLoss(double stopLossPrice, MarketPosition tradeDirection)
+        {
+            if (consecutiveLosses == 0 || Position.MarketPosition != MarketPosition.Flat) return;
+            string reason;
+            if (!TradingIsAllowed(out reason)) return;
+
+            // Use stop-loss price as entry for recovery trade
+            double entryPrice = stopLossPrice;
+            string label = $"Recovery_SL_{consecutiveLosses}_{tradeDirection}";
+
+            // Calculate stop-loss and take-profit based on market levels or fixed ticks
+            double stopLossPriceNew = tradeDirection == MarketPosition.Long
+                ? (recentLow5M != double.MaxValue ? Math.Min(recentLow5M, entryPrice - 20 * TickSize) : (entryPrice - 20 * TickSize)) // SL below entry for long
+                : (recentHigh5M != 0 ? Math.Max(recentHigh5M, entryPrice + 20 * TickSize) : (entryPrice + 20 * TickSize)); // SL above entry for short
+            double stopLossPips = Math.Abs(entryPrice - stopLossPriceNew) / TickSize;
+            double takeProfitPips = stopLossPips * 1.5; // TP 1.5x risk to ensure correct placement
+
+            // Calculate quantity based on risk
+            double accountBalance = Account.Get(AccountItem.CashValue, Currency.UsDollar);
+            double maxRiskCurrency = (MaxRiskPerTradePct / 100.0) * accountBalance;
+            double riskCurrencyPerContract = stopLossPips * Instrument.MasterInstrument.PointValue;
+            int adjustedQty = (int)(maxRiskCurrency / riskCurrencyPerContract);
+            if (adjustedQty < 1) adjustedQty = 1; // Minimum quantity
+
+            // Cap quantity based on consecutive losses (up to 7)
+            adjustedQty = Math.Min(adjustedQty, consecutiveLosses + 1);
+            if (adjustedQty > 7) adjustedQty = 7;
+
+            // Execute recovery trade
+            if (tradeDirection == MarketPosition.Long)
+                EnterLongHelper(adjustedQty, label);
+            else
+                EnterShortHelper(adjustedQty, label);
+            tradeCountToday++;
+
+            // Set stop-loss and take-profit
+            double stopPrice = stopLossPriceNew;
+            double targetPrice = tradeDirection == MarketPosition.Long
+                ? entryPrice + takeProfitPips * TickSize // TP above entry for long
+                : entryPrice - takeProfitPips * TickSize; // TP below entry for short
+            if (tradeDirection == MarketPosition.Long && targetPrice <= entryPrice)
+                targetPrice = entryPrice + (stopLossPips * 1.5 * TickSize); // Ensure TP above entry
+            else if (tradeDirection == MarketPosition.Short && targetPrice >= entryPrice)
+                targetPrice = entryPrice - (stopLossPips * 1.5 * TickSize); // Ensure TP below entry
+
+            if (tradeDirection == MarketPosition.Long)
+            {
+                sharedLongStopLoss = stopPrice;
+                sharedLongTakeProfit = targetPrice;
+                SetStopLoss(label, CalculationMode.Price, stopPrice, false);
+                SetProfitTarget(label, CalculationMode.Price, targetPrice, false);
+            }
+            else
+            {
+                sharedShortStopLoss = stopPrice;
+                sharedShortTakeProfit = targetPrice;
+                SetStopLoss(label, CalculationMode.Price, stopPrice, false);
+                SetProfitTarget(label, CalculationMode.Price, targetPrice, false);
+            }
+
+            Print($"Recovery trade executed: Direction={tradeDirection}, Entry={entryPrice}, SL={stopPrice}, TP={targetPrice}, Qty={adjustedQty}");
+        }
+
+
+
+
+
 
         private bool GetTradeTaken(string context)
         {
